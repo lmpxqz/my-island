@@ -14,13 +14,32 @@ accounts in issues, pull requests, or review comments.
 
 ## Scope of this repository
 
-`consenlabs/token-ui` is a UI starter kit. It is intentionally limited to mock
-or demo-safe behavior.
+`consenlabs/token-ui` is a public wallet UI starter kit for demos, prototyping,
+and co-creation. It can include wallet-facing product flows, but it is not a
+custody backend or secret-management service.
 
-- No private keys, mnemonics, passwords, keystore material, or signing secrets.
-- No real transaction signing, live-wallet integration, or custody logic.
-- No new third-party analytics or outbound data collection without explicit
-  maintainer approval.
+Allowed in scope:
+- wallet-related UI and UX flows
+- signing previews and risk-confirmation UI
+- DApp connection and approval UX
+- mock, local-only, and testnet-oriented examples
+
+Out of scope by default unless explicitly designed and reviewed:
+- server-side custody or secret escrow
+- transmitting mnemonic / private key / password material to third parties
+- hidden or unexplained signing / approval behavior
+- unnecessary analytics or data egress around wallet secrets
+
+## Security skill guidance
+
+The repository `security/SKILL.md` is a design-time security guide for building
+wallet features more safely.
+
+- It should be used to improve risk disclosure, transaction decoding, approval
+  warnings, and other wallet UX decisions.
+- It is not a blanket instruction to forbid wallet functionality in this repo.
+- If the skill conflicts with the product goal, treat that as a prompt to adjust
+  the UX and safety controls, not to remove legitimate wallet capabilities.
 
 ## Reporting
 
