@@ -4,11 +4,11 @@
 
 This project is a web wallet where users keep full asset sovereignty while experiencing near-zero blockchain complexity. The design language reflects this dual nature: it is calm and trustworthy enough for a financial interface, yet light and modern enough to feel like a consumer app. Every design decision serves the product principles — tokens over chains, clarity over chrome, and human control over automation.
 
-The visual identity is built on the current Figma design system export, consuming `Global` and `Semantic` tokens. Clean white page surfaces (`--background`, `--surface-page`) and soft neutral elevated surfaces (`--card`, `--popover`) dominate the canvas, providing an open and breathable backdrop for dense financial data. Primary Blue (`--primary`) remains the main interactive accent for CTAs, active states, and links. Supporting cyan (`--brand-secondary`) appears in brand moments, charts, and identity gradients, while `--accent` is reserved for selected and open-state surfaces.
+The visual identity is built on the current runtime token system in `packages/ui/src/styles/globals.css`, consuming CSS semantic variables as the source of truth. Clean white page surfaces (`--background`, `--surface-page`) and soft neutral elevated surfaces (`--card`, `--popover`) dominate the canvas, providing an open and breathable backdrop for dense financial data. Primary Blue (`--primary`) remains the main interactive accent for CTAs, active states, and links. Supporting cyan (`--brand-secondary`) appears in brand moments, charts, and identity gradients, while `--accent` is reserved for selected and open-state surfaces.
 
 Typography is anchored in **Inter** with **Noto Sans SC** as the Chinese fallback. Repo typography uses explicit semantic text tokens in `globals.css` rather than Figma style exports.
 
-Dark mode is not an afterthought — it is a first-class citizen. The dark palette uses deep-ocean semantic surfaces, explicit border tokens, and mode-specific brand values from the Figma token export.
+Dark mode is not an afterthought — it is a first-class citizen. The dark palette uses deep-ocean semantic surfaces, explicit border tokens, and mode-specific brand values from the current CSS token set.
 
 **Key Characteristics:**
 - Inter + Noto Sans SC type stack, with semantic text utilities such as `text-title-sm` and `text-body-md`
@@ -18,16 +18,16 @@ Dark mode is not an afterthought — it is a first-class citizen. The dark palet
 - Semantic accent surface: `--accent` for subtle selected, open, and low-emphasis interactive backgrounds
 - Token-centric data display — financial information presented in clean, scannable layouts
 - Generous rounded corners (12–20px on cards, full pill on CTAs) creating a soft, approachable feel
-- Soft, layered shadows using the brand navy (`rgba(17, 29, 74, *)`) for depth that feels organic
+- Soft, layered shadows using semantic shadow color tokens and CSS `color-mix(...)` for depth that scales by mode
 - 4pt base spacing token with an 8px visual rhythm across components
 - Dark mode as equal citizen — deep-ocean surfaces with explicit semantic foreground, border, and effect tokens
 
 ### Token Source Rules
 
-- Use `Semantic/*` tokens as the repo contract for colors, density, and effect colors.
-- Use `Global/*` tokens only to derive shared foundations such as font families, spacing, radius, motion, tracking, and line-height.
-- Do not consume `Typography-styles` directly; map typography into explicit semantic text tokens first.
-- Shadow color comes from Figma semantic effect tokens; CSS shadow offset, blur, and spread remain repo-owned in `--shadow-*`.
+- Treat `packages/ui/src/styles/globals.css` as the canonical source for colors, density, radius, motion, typography utilities, and effect tokens.
+- Update this document when `globals.css` changes materially, so generated UI follows the app users actually see.
+- Do not consume one-off Figma style names directly; map typography into explicit semantic text tokens first.
+- Shadow color and structure are defined by the CSS `--shadow-*` variables.
 
 ## 2. Color Palette & Roles
 
@@ -35,33 +35,34 @@ Dark mode is not an afterthought — it is a first-class citizen. The dark palet
 
 - **Primary Blue** (`#007fff`): `--primary`, `--brand`. The singular interactive accent — CTAs, active navigation, progress bars, and links. This is the identity color.
 - **Brand Secondary Cyan** (`#0cc5ff`): `--brand-secondary`, `--chart-2`. Secondary brand color for gradients, chart accents, and supporting highlights. Never competes with Primary Blue for CTA attention.
-- **Brand Hover** (`#66b2ff`): `--brand-hover`, `--chart-3`. Lighter blue for hover states and lighter brand-derived chart accents.
+- **Brand Hover** (`#006cd9`): `--brand-hover`, `--chart-3`. Darker blue for hover states and brand-derived chart accents.
 
 ### Surfaces — Light
 
-- **Page Background** (`#fafaf9`): `--background`, `--surface-page`. The base canvas — a warm off-white that prevents the sterile feel of pure white.
-- **Card White** (`#ffffff`): `--card`, `--popover`. Clean white for elevated card surfaces and floating containers.
-- **Input Surface** (`#f9fafb`): `--input`, `--input-background`. Soft field and input chrome surface.
-- **Cool Surface** (`#f2f6fb`): `--surface-cool`. Blue-tinted light surface for subtle section differentiation.
-- **Soft Surface** (`rgba(247, 247, 247, 0.88)`): `--surface-light`. Semi-transparent light surface for overlay contexts.
+- **Page Background** (`#ffffff`): `--background`, `--surface-page`. The base canvas for starter pages and demos.
+- **Card Neutral** (`#f8f9fa`): `--card`, `--popover`, `--muted`, `--surface-cool`. Soft neutral surfaces for elevated cards and floating containers.
+- **Input Surface** (`#f0f1f3`): `--input`, `--input-background`. Soft field and input chrome surface.
+- **Cool Surface** (`#f8f9fa`): `--surface-cool`. Neutral light surface for subtle section differentiation.
+- **Soft Surface** (`rgba(240, 241, 243, 0.96)`): `--surface-light`. Semi-transparent light surface for overlay contexts.
 - **Secondary** (`#f0f1f3`): `--secondary`, `--muted`. Neutral gray for secondary buttons, muted backgrounds, and inactive states.
-- **Accent Surface** (`#f0f7ff`): `--accent`. Soft accent wash for open states, subtle highlights, and low-emphasis interactive surfaces.
-- **Surface Blue** (`#f8fafe`): `--surface-blue`. Very light blue wash for feature highlights and info backgrounds.
-- **Surface Blue Light** (`#f2f6ff`): `--surface-blue-light`. Badge backgrounds, subtle blue tint areas.
-- **Surface Blue Dim** (`#eff6ff`): `--surface-blue-dim`. Softer blue surface for icon containers.
-- **Surface Blue Info** (`#eef5ff`): `--surface-blue-info`. Informational blue surface backgrounds.
+- **Accent Surface** (`#e7f1fc`): `--accent`. Soft accent wash for open states, subtle highlights, and low-emphasis interactive surfaces.
+- **Surface Blue** (`#e7f1fc`): `--surface-blue`. Light blue wash for feature highlights and info backgrounds.
+- **Surface Blue Light** (`#cfe4fa`): `--surface-blue-light`. Badge backgrounds, subtle blue tint areas.
+- **Surface Blue Dim** (`#a2cdf7`): `--surface-blue-dim`. Softer blue surface for icon containers.
+- **Surface Blue Info** (`#d0f0fa`): `--surface-blue-info`. Informational cyan-blue surface backgrounds.
 
 ### Surfaces — Dark
 
-- **Dark Background** (`#0a0b0d`): `--dark-surface`, dark `--background`. The deepest canvas in dark mode.
-- **Dark Card** (`#282b31`): Dark `--card`, `--popover`, `--secondary`, `--muted`, `--accent`. Elevated surface in dark mode.
-- **Dark Surface Blue** (`#1a1e2e`): Dark mode equivalent of blue-tinted surfaces.
+- **Dark Background** (`#0c1637`): dark `--background`, `--surface-page`, and `--surface-cool`. The deep-ocean canvas in dark mode.
+- **Dark Card** (`#0f1a43`): Dark `--card`, `--popover`, `--secondary`, and elevated surfaces.
+- **Dark Accent** (`#004c99`): Dark `--accent`, `--primary-soft`, and selected-state surfaces.
+- **Dark Surface Blue** (`#002952`): Dark mode equivalent of blue-tinted surfaces.
 
 ### Text — Light
 
 - **Foreground** (`#111d4a`): `--foreground`. Primary heading and body text on light backgrounds — a deep navy-black that is warmer than pure black.
 - **Secondary Foreground** (`#111d4a`): `--secondary-foreground`. Matches foreground on secondary surfaces.
-- **Muted Foreground** (`#717182`): `--muted-foreground`. Secondary text, descriptions, labels — a balanced mid-gray.
+- **Muted Foreground** (`#99a1af`): `--muted-foreground`. Secondary text, descriptions, labels — a cool mid-gray.
 - **Tertiary** (`#99a1af`): `--text-tertiary`. Placeholder text, least-prominent labels.
 - **Secondary Gray** (`#475467`): `--text-secondary-gray`. Slightly darker than muted, for important secondary info.
 
@@ -82,21 +83,21 @@ Dark mode is not an afterthought — it is a first-class citizen. The dark palet
 
 ### Semantic — Feedback
 
-- **Success** (`#10b981`): `--success`. Completed states, positive confirmations.
-- **Success Text** (`#0f9f6e` light / `#34d399` dark): `--success-text`. Text-optimized success color.
-- **Success Surface** (`#ecfdf5` light / `rgba(16, 185, 129, 0.12)` dark): `--success-surface`. Background tint for success states.
-- **Success Border** (`#b6e3cf` light / `rgba(16, 185, 129, 0.24)` dark): `--success-border`. Subtle border for success cards.
-- **Success Surface Tint** (`#f2fcf7` light / `rgba(16, 185, 129, 0.06)` dark): `--success-surface-tint`. Very light success wash for completed step cards.
-- **Warning** (`#eab308`): `--warning`. Cautionary highlights, warning borders, and low-emphasis warning backgrounds via opacity.
-- **Positive** (`#00a63e` light / `#34d399` dark): `--positive`. Profit, gains, positive P&L values.
-- **Positive Surface** (`#f0fdf4` light / `rgba(16, 185, 129, 0.08)` dark): `--positive-surface`. Background for positive badges.
-- **Destructive** (`#d4183d` light / `#fb2c36` dark): `--destructive`. Errors, dangerous actions, negative states.
+- **Success** (`#4bce71` light / `#62d082` dark): `--success`. Completed states, positive confirmations.
+- **Success Text** (`#228e42` light / `#62d082` dark): `--success-text`. Text-optimized success color.
+- **Success Surface** (`#daf1e1` light / `#2d7c44` dark): `--success-surface`. Background tint for success states.
+- **Success Border** (`#8adaa1` light / `#30bb58` dark): `--success-border`. Subtle border for success cards.
+- **Success Surface Tint** (`#daf1e1` light / `#2d7c44` dark): `--success-surface-tint`. Light success wash for completed step cards.
+- **Warning** (`#fc8c4d` light / `#f88e53` dark): `--warning`. Cautionary highlights, warning borders, and low-emphasis warning backgrounds.
+- **Positive** (`#4bce71` light / `#62d082` dark): `--positive`. Profit, gains, positive P&L values.
+- **Positive Surface** (`#daf1e1` light / `#2d7c44` dark): `--positive-surface`. Background for positive badges.
+- **Destructive** (`#f3636f` light / `#ef626e` dark): `--destructive`. Errors, dangerous actions, negative states.
 
 ### Borders
 
-- **Border** (`rgba(17, 29, 74, 0.08)` light / `rgba(255, 255, 255, 0.1)` dark): `--border`. Default border color — barely visible, structurally defining.
-- **Input Token** (`#f9fafb` light / `rgba(255, 255, 255, 0.15)` dark): `--input`. Input border / field surface token for soft controls.
-- **Info Border** (`#d8e8ff` light / `rgba(0, 127, 255, 0.2)` dark): `--info-border`. Active step card borders, informational highlights.
+- **Border** (`#ecedf1` light / `#4d5677` dark): `--border`. Default border color — barely visible, structurally defining.
+- **Input Token** (`#f0f1f3` light / `#080e25` dark): `--input`. Input border / field surface token for soft controls.
+- **Info Border** (`#0cc5ff` light / `#32cafa` dark): `--info-border`. Active step card borders, informational highlights.
 
 ### Overlays
 
@@ -108,9 +109,9 @@ Dark mode is not an afterthought — it is a first-class citizen. The dark palet
 |-------|-------|------|
 | `--chart-1` | `#007fff` | `#007fff` |
 | `--chart-2` | `#0cc5ff` | `#0cc5ff` |
-| `--chart-3` | `#66b2ff` | `#66b2ff` |
-| `--chart-4` | `#f2f6fb` | `#282b31` |
-| `--chart-5` | `#111d4a` | `#f2f6fb` |
+| `--chart-3` | `#006cd9` | `#007fff` |
+| `--chart-4` | `#f8f9fa` | `#0c1637` |
+| `--chart-5` | `#111d4a` | `#888ea4` |
 
 ## 3. Typography Rules
 
@@ -163,13 +164,13 @@ Dark mode is not an afterthought — it is a first-class citizen. The dark palet
 **Primary (Default CTA)**
 - Background: `--primary` (`#007fff`)
 - Text: `--primary-foreground` (`#ffffff`)
-- Shadow: `--shadow-cta-sm` (`0 4px 14px rgba(0, 127, 255, 0.18)`)
+- Shadow: `--shadow-cta-sm` (`0 6px 16px color-mix(in srgb, var(--shadow-cta-color) 80%, transparent)`)
 - Shape: `rounded-full` (pill)
 - Height: 40px (default), 48px (lg), 56px (hero)
 - Font: 14px, weight 500
 - Hover: brightness shift
 - Focus: `--ring` outline
-- Hero variant: larger shadow `--shadow-cta` (`0 4px 16px rgba(0, 127, 255, 0.2)`)
+- Hero variant: larger shadow `--shadow-cta` (`0 12px 28px var(--shadow-cta-color)`)
 
 **Secondary**
 - Background: `--secondary` (`#f0f1f3`)
@@ -198,8 +199,8 @@ Dark mode is not an afterthought — it is a first-class citizen. The dark palet
 - Use: High-contrast inverse CTA
 
 **Destructive**
-- Text: `--destructive` (`#d4183d`)
-- Background: transparent
+- Background: `--destructive`
+- Text: `--destructive-foreground`
 - Use: Dangerous actions (close, delete)
 
 **Link**
@@ -368,14 +369,14 @@ Agent chat message bubbles.
 
 Standard text input field.
 
-- Height: 40px
-- Shape: `rounded-lg` (8px)
-- Border: 1px solid `--input`
-- Background: transparent by default; use `--input-background` when a filled field surface is needed
+- Height: 48px
+- Shape: `rounded-md` (12px in the current Tailwind token map)
+- Border: 1px solid `--border`
+- Background: `--input-background`
 - Placeholder: `--muted-foreground`
-- Focus: `border-ring`, `ring-2 ring-ring/50`
-- Font: 16px (`text-base`)
-- Padding: px-3
+- Focus: `border-ring`, `ring-3 ring-ring/50`
+- Font: 14px (`text-body-md`)
+- Padding: px-4
 
 ### Progress
 
@@ -532,9 +533,9 @@ Task checklist items.
 | `--radius-28` | 28px | IconBox lg/xl |
 | `--radius-2xl` | 32px | — |
 | `--radius-34` | 34px | IconBox 2xl |
-| `--radius-3xl` | 40px | — |
-| `--radius-4xl` / `--radius-pill` | 56px | — |
-| `--radius-full-pill` | 100000px | — |
+| `--radius-3xl` | 32px | Large app-level demo panels only |
+| `--radius-4xl` / `--radius-pill` | 9999px | True pill controls |
+| `--radius-full-pill` | 9999px | True pill controls |
 | `rounded-full` | 9999px | Buttons, badges, avatars, chips, icon buttons — the signature pill shape |
 
 ### Whitespace Philosophy
@@ -548,19 +549,19 @@ Task checklist items.
 | Level | Token | Value | Use |
 |-------|-------|-------|-----|
 | Flat (Level 0) | — | No shadow | Page background, flat panels |
-| Card (Level 1) | `--shadow-card` | `0 1px 3px rgba(17, 29, 74, 0.04), 0 1px 2px rgba(17, 29, 74, 0.06)` | Default section panels, list cards |
-| Card Medium (Level 2) | `--shadow-card-md` | `0 2px 8px rgba(17, 29, 74, 0.06)` | Elevated panels, page headers |
-| Card Large (Level 3) | `--shadow-card-lg` | `0 8px 24px rgba(17, 29, 74, 0.05)` | Prominent feature cards |
-| Icon | `--shadow-icon` | `0 6px 20px rgba(17, 29, 74, 0.08)` | Feature item icon containers |
-| CTA Small | `--shadow-cta-sm` | `0 4px 14px rgba(0, 127, 255, 0.18)` | Default primary buttons, outgoing chat bubbles |
-| CTA | `--shadow-cta` | `0 4px 16px rgba(0, 127, 255, 0.2)` | Hero buttons, large icon boxes |
-| CTA Large | `--shadow-cta-lg` | `0 16px 40px rgba(0, 127, 255, 0.32)` | Maximum emphasis CTAs |
-| Nav Active | `--shadow-nav-active` | `0 10px 15px rgba(0, 127, 255, 0.25)` | Active sidebar navigation item |
-| Dialog | `--shadow-dialog` | `0 24px 60px rgba(17, 29, 74, 0.18)` | Modal dialogs, overlays |
+| Card (Level 1) | `--shadow-card` | `0 8px 24px color-mix(in srgb, var(--shadow-card-color) 55%, transparent)` | Default section panels, list cards |
+| Card Medium (Level 2) | `--shadow-card-md` | `0 12px 32px color-mix(in srgb, var(--shadow-card-color) 70%, transparent)` | Elevated panels, page headers |
+| Card Large (Level 3) | `--shadow-card-lg` | `0 24px 56px color-mix(in srgb, var(--shadow-card-color) 75%, transparent)` | Prominent feature cards |
+| Icon | `--shadow-icon` | `0 10px 28px color-mix(in srgb, var(--shadow-card-color) 70%, transparent)` | Feature item icon containers |
+| CTA Small | `--shadow-cta-sm` | `0 6px 16px color-mix(in srgb, var(--shadow-cta-color) 80%, transparent)` | Default primary buttons, outgoing chat bubbles |
+| CTA | `--shadow-cta` | `0 12px 28px var(--shadow-cta-color)` | Hero buttons, large icon boxes |
+| CTA Large | `--shadow-cta-lg` | `0 20px 48px color-mix(in srgb, var(--shadow-cta-color) 120%, transparent)` | Maximum emphasis CTAs |
+| Nav Active | `--shadow-nav-active` | `0 10px 24px color-mix(in srgb, var(--shadow-cta-color) 90%, transparent)` | Active sidebar navigation item |
+| Dialog | `--shadow-dialog` | `0 24px 60px var(--shadow-dialog-color)` | Modal dialogs, overlays |
 
 ### Shadow Philosophy
 
-Shadows in this system serve two distinct purposes — structural elevation and brand emphasis. Structural shadows use the foreground navy (`rgba(17, 29, 74, *)`) at very low opacities (0.04–0.08), creating barely perceptible lift that registers subconsciously. Brand shadows use the primary blue (`rgba(0, 127, 255, *)`) at higher opacities (0.18–0.32), creating a colored glow beneath interactive elements that draws attention and reinforces the brand palette.
+Shadows in this system serve two distinct purposes — structural elevation and brand emphasis. Structural shadows use `--shadow-card-color` and `color-mix(...)` to scale by theme. Brand shadows use `--shadow-cta-color`, creating a colored glow beneath interactive elements that draws attention and reinforces the brand palette.
 
 The CTA shadow scale (sm → default → lg) allows progressive emphasis: a standard button gets a subtle blue underglow, a hero-sized button gets a dramatic one. Active navigation items share this blue shadow language, visually connecting them to the primary action palette.
 
@@ -568,11 +569,11 @@ The CTA shadow scale (sm → default → lg) allows progressive emphasis: a stan
 
 | Token | Value | Use |
 |-------|-------|-----|
-| `--ease-emphasis` | `cubic-bezier(0.22, 1, 0.36, 1)` | Emphasized transitions — progress bars, hero animations |
+| `--ease-emphasis` | `cubic-bezier(0.16, 1, 0.3, 1)` | Emphasized transitions — progress bars, hero animations |
 | `--duration-fast` | 150ms | Micro-interactions — hover, focus |
-| `--duration-normal` | 220ms | Standard transitions — color changes, opacity |
-| `--duration-soft` | 420ms | Smooth transitions — progress fills, panel entries |
-| `--duration-hero` | 560ms | Hero animations — page transitions, large element entries |
+| `--duration-normal` | 240ms | Standard transitions — color changes, opacity |
+| `--duration-soft` | 360ms | Smooth transitions — progress fills, panel entries |
+| `--duration-hero` | 500ms | Hero animations — page transitions, large element entries |
 
 ### Identity Gradient
 
@@ -589,7 +590,7 @@ The brand identity gradient animates through the brand palette for emphasis mome
 ### Do
 
 - Use `--primary` (`#007fff`) for CTAs, links, and active states, and `--ring` for focus treatments
-- Use `--background` / `--surface-page` (`#fafaf9`) as the page background and `--card` (`#ffffff`) for elevated content
+- Use `--background` / `--surface-page` (`#ffffff`) as the page background and `--card` (`#f8f9fa`) for elevated content
 - Use `rounded-full` (pill) shape for all buttons and chips — this is the signature interactive shape
 - Apply `--shadow-cta-sm` to primary buttons — the blue underglow is the brand's tactile signal
 - Use `--muted-foreground` for secondary text — never raw opacity on foreground color

@@ -81,7 +81,7 @@ function WalletDashboard() {
       </section>
 
       <section className="grid gap-6">
-        <Card className="rounded-3xl">
+        <Card>
           <CardHeader>
             <div>
               <CardTitle>Unified balance</CardTitle>
@@ -95,13 +95,13 @@ function WalletDashboard() {
               <div className="mt-2 text-display-lg font-bold tracking-tight">$7,276.40</div>
             </div>
 
-            <ActionBar columns={4}>
+            <ActionBar columns={2} className="xl:grid-cols-4">
               <ActionButton variant="primary" icon={<Glyph>+</Glyph>}>
                 Buy
               </ActionButton>
-              <ActionButton icon={<Glyph>-</Glyph>}>Send</ActionButton>
-              <ActionButton icon={<Glyph>S</Glyph>}>Swap</ActionButton>
-              <ActionButton icon={<Glyph>R</Glyph>}>Receive</ActionButton>
+              <ActionButton icon={<Glyph>-&gt;</Glyph>}>Send</ActionButton>
+              <ActionButton icon={<Glyph>&lt;&gt;</Glyph>}>Swap</ActionButton>
+              <ActionButton icon={<Glyph>&lt;-</Glyph>}>Receive</ActionButton>
             </ActionBar>
 
             <div className="space-y-2">
@@ -121,7 +121,7 @@ function WalletDashboard() {
           </CardContent>
         </Card>
 
-        <Card id="agent-checklist" className="rounded-3xl">
+        <Card id="agent-checklist">
           <CardHeader>
             <CardTitle>AI agent checklist</CardTitle>
             <CardDescription>Keep generated work aligned with the UI Kit.</CardDescription>

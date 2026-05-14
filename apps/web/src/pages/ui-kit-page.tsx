@@ -99,14 +99,14 @@ function UiKitPage() {
             <ActionButton variant="primary" icon={<Glyph>+</Glyph>}>
               Buy
             </ActionButton>
-            <ActionButton icon={<Glyph>-</Glyph>}>Send</ActionButton>
-            <ActionButton icon={<Glyph>S</Glyph>}>Swap</ActionButton>
-            <ActionButton icon={<Glyph>R</Glyph>}>Receive</ActionButton>
+            <ActionButton icon={<Glyph>-&gt;</Glyph>}>Send</ActionButton>
+            <ActionButton icon={<Glyph>&lt;&gt;</Glyph>}>Swap</ActionButton>
+            <ActionButton icon={<Glyph>&lt;-</Glyph>}>Receive</ActionButton>
           </ActionBar>
           <div className="flex items-center gap-2 lg:shrink-0">
             <IconButton icon={<Glyph>?</Glyph>} label="Help" variant="ghost" size="md" />
-            <IconButton icon={<Glyph>N</Glyph>} label="Notifications" variant="muted" size="md" />
-            <IconButton icon={<Glyph>A</Glyph>} label="Account" variant="foreground" size="md" />
+            <IconButton icon={<Glyph>!</Glyph>} label="Notifications" variant="muted" size="md" />
+            <IconButton icon={<Glyph>0x</Glyph>} label="Account" variant="foreground" size="md" />
           </div>
         </div>
       </Group>
