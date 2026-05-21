@@ -233,6 +233,8 @@ const receiveTokenOptions: Record<string, string[]> = {
   Polygon: ['USDT', 'USDC', 'MATIC'],
 }
 
+const gameplayIntroStorageKey = 'my-island.gameplay-intro-dismissed.v1'
+
 function receiveTokensFor(chain: string) {
   return receiveTokenOptions[chain] ?? [defaultToken]
 }
@@ -708,6 +710,30 @@ function makeDailyQuestState(cycleId = dailyQuestCycleId()): DailyQuestState {
   }
 }
 
+function hasDismissedGameplayIntro() {
+  if (typeof window === 'undefined') {
+    return true
+  }
+
+  try {
+    return window.localStorage?.getItem(gameplayIntroStorageKey) === '1'
+  } catch {
+    return false
+  }
+}
+
+function writeGameplayIntroDismissed() {
+  if (typeof window === 'undefined') {
+    return
+  }
+
+  try {
+    window.localStorage?.setItem(gameplayIntroStorageKey, '1')
+  } catch {
+    // If storage is blocked, the banner simply returns on refresh.
+  }
+}
+
 function readWalletStorage() {
   if (typeof window === 'undefined') {
     return null
@@ -1130,6 +1156,7 @@ function WalletDashboard() {
   const [receiveError, setReceiveError] = useState('')
   const [selectedIslandDetail, setSelectedIslandDetail] = useState<IslandDetailSelection | null>(null)
   const [signingState, setSigningState] = useState<SigningState>({ status: 'idle' })
+  const [showGameplayIntro, setShowGameplayIntro] = useState(() => !hasDismissedGameplayIntro())
   const [sendForm, setSendForm] = useState<SendFormState>({
     fromIslandId: persistedState.current?.islands[0]?.id ?? initialIslands[0]?.id ?? '',
     chain: defaultChain,
@@ -1397,6 +1424,11 @@ function WalletDashboard() {
     )
   }
 
+  const dismissGameplayIntro = () => {
+    setShowGameplayIntro(false)
+    writeGameplayIntroDismissed()
+  }
+
   const openCreateWallet = async () => {
     const name = `新营地岛 ${walletIslands.length + 1}`
     setWalletDraft({
@@ -1655,6 +1687,7 @@ function WalletDashboard() {
             onClose={() => setSelectedIslandDetail(null)}
             onRename={renameIsland}
           />
+          {showGameplayIntro ? <GameplayIntroBanner onClose={dismissGameplayIntro} /> : null}
         </div>
       </div>
 
@@ -1689,6 +1722,29 @@ function ViewPane({ active, children }: { active: boolean; children: ReactNode }
       }
     >
       {children}
+    </div>
+  )
+}
+
+function GameplayIntroBanner({ onClose }: { onClose: () => void }) {
+  return (
+    <div className="absolute inset-x-4 top-5 z-[95] rounded-2xl border border-[#b8e7ff]/70 bg-[#0b65c8]/88 p-4 text-[#effaff] shadow-[0_18px_34px_rgba(2,24,77,0.34),inset_0_1px_0_rgba(255,255,255,0.42)] backdrop-blur-xl">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="text-title-sm font-black">My Island 核心玩法</div>
+          <p className="mt-2 text-body-sm font-bold leading-6 text-[#dcf6ff]">
+            创建钱包生成岛屿；账户总价值以 U 计算，并推动岛屿成长为小型、中型、大型。转账和收款会形成本地航线记录。每日任务产出岛币，岛币只用于购买和使用节日岛屿皮肤。
+          </p>
+        </div>
+        <button
+          aria-label="关闭玩法说明"
+          className="shrink-0 rounded-lg border border-white/45 bg-white/18 px-3 py-2 text-caption font-black text-[#effaff] shadow-[inset_0_1px_0_rgba(255,255,255,0.35)] backdrop-blur-md"
+          onClick={onClose}
+          type="button"
+        >
+          我知道了
+        </button>
+      </div>
     </div>
   )
 }
