@@ -12,6 +12,7 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
+    "@consenlabs/tcx-wasm": "^0.9.1",
     "@repo/ui": "workspace:*",
     "react": "catalog:react",
     "react-dom": "catalog:react",
