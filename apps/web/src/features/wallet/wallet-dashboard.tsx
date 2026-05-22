@@ -214,9 +214,7 @@ interface DailyQuestState {
 }
 
 const chains = ['BNB Chain', 'Ethereum', 'Bitcoin', 'Polygon', 'Arbitrum']
-const tokens = ['ETH', 'BTC', 'USDT', 'USDC', '岛币']
-const defaultChain = chains[0] ?? 'Ethereum'
-const defaultToken = tokens[0] ?? 'ETH'
+const tokens = ['BNB', 'ETH', 'BTC', 'USDT', 'USDC', '岛币']
 const transferTokensByChain: Record<string, string[]> = {
   Arbitrum: ['ETH', 'USDT', 'USDC'],
   Bitcoin: ['BTC'],
@@ -224,6 +222,8 @@ const transferTokensByChain: Record<string, string[]> = {
   Ethereum: ['ETH', 'USDC', 'USDT'],
   Polygon: ['MATIC', 'USDT', 'USDC'],
 }
+const defaultChain = chains[0] ?? 'Ethereum'
+const defaultToken = transferTokensByChain[defaultChain]?.[0] ?? tokens[0] ?? 'BNB'
 
 const receiveTokenOptions: Record<string, string[]> = {
   Arbitrum: ['USDT', 'USDC', 'ETH'],
@@ -237,6 +237,10 @@ const gameplayIntroStorageKey = 'my-island.gameplay-intro-dismissed.v1'
 
 function receiveTokensFor(chain: string) {
   return receiveTokenOptions[chain] ?? [defaultToken]
+}
+
+function transferTokensFor(chain: string) {
+  return transferTokensByChain[chain] ?? [defaultToken]
 }
 
 function receivePayload(address: string) {
@@ -1534,6 +1538,13 @@ function WalletDashboard() {
     }
 
     setSigningState({ status: 'idle' })
+    setSendForm((form) => {
+      const chainTokens = transferTokensFor(form.chain)
+      return {
+        ...form,
+        token: chainTokens.includes(form.token) ? form.token : (chainTokens[0] ?? defaultToken),
+      }
+    })
     advanceDailyQuest('wallet-open-send')
     setActiveModal('send')
   }
@@ -2703,7 +2714,7 @@ function WalletModalLayer({
               value={sendForm.fromIslandId}
               onChange={(value) => onSendFormChange((form) => ({ ...form, fromIslandId: value }))}
               options={islands.map((island) => ({
-                label: `${island.name} · ${tokenBalanceLabel(island, sendForm.token)}`,
+                label: island.name,
                 value: island.id,
               }))}
             />
@@ -2715,7 +2726,7 @@ function WalletModalLayer({
                   onSendFormChange((form) => ({
                     ...form,
                     chain: value,
-                    token: transferTokensByChain[value]?.[0] ?? form.token,
+                    token: transferTokensFor(value)[0] ?? defaultToken,
                   }))
                 }
                 options={chains.map((chain) => ({ label: chain, value: chain }))}
@@ -2724,7 +2735,7 @@ function WalletModalLayer({
                 label="代币"
                 value={sendForm.token}
                 onChange={(value) => onSendFormChange((form) => ({ ...form, token: value }))}
-                options={(transferTokensByChain[sendForm.chain] ?? tokens).map((token) => ({
+                options={transferTokensFor(sendForm.chain).map((token) => ({
                   label: token,
                   value: token,
                 }))}
@@ -2763,6 +2774,9 @@ function WalletModalLayer({
                 正在调用 tcx-wasm 生成本地签名...
               </div>
             ) : null}
+            <div className="rounded-xl border border-[#9b6330]/30 bg-[#fff8df]/56 px-3 py-2 text-caption font-black text-[#6b4a24]">
+              当前使用代币：{sendForm.token}
+            </div>
             <Button className="w-full" onClick={onSubmitTransfer}>
               签名 / 广播并写入航线
             </Button>
