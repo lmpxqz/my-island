@@ -2,9 +2,9 @@ import { Badge } from '@repo/ui/components/badge'
 import { Button } from '@repo/ui/components/button'
 import { Input } from '@repo/ui/components/input'
 import type { CSSProperties, Dispatch, ReactNode, SetStateAction } from 'react'
-import { useEffect, useMemo, useRef, useState } from 'react'
-import oceanIslandsMap from '../../assets/coin-islands/backgrounds/ocean-islands-map.png'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import oceanPageBg from '../../assets/coin-islands/backgrounds/ocean-page-bg.png'
+import oceanWorldMap from '../../assets/coin-islands/backgrounds/ocean-world-map.jpg'
 import islandDetailCamp from '../../assets/coin-islands/details/island-detail-camp.jpg'
 import islandDetailCitadel from '../../assets/coin-islands/details/island-detail-citadel.jpg'
 import islandDetailVillage from '../../assets/coin-islands/details/island-detail-village.jpg'
@@ -266,9 +266,10 @@ const islandPlacements = [
 
 const islandLayoutBounds = {
   height: 720,
-  minGap: 20,
+  minGap: 42,
   width: 520,
 }
+const islandVisualScale = 1.72
 
 const initialIslands: Island[] = []
 
@@ -594,7 +595,7 @@ const skinSeries: SkinSeries[] = [
 ]
 
 const coinIslandImageAssets = [
-  oceanIslandsMap,
+  oceanWorldMap,
   oceanPageBg,
   islandDetailCamp,
   islandDetailCitadel,
@@ -652,9 +653,9 @@ const islandDetailBackgrounds: Record<IslandLevel, string> = {
   citadel: islandDetailCitadel,
 }
 
-const walletStorageKey = 'coin-islands.wallet-state.v1'
-const skinMarketStorageKey = 'coin-islands.skin-market.v1'
-const dailyQuestStorageKey = 'coin-islands.daily-quests.v1'
+const walletStorageKey = 'coin-islands.wallet-state.v2'
+const skinMarketStorageKey = 'coin-islands.skin-market.v2'
+const dailyQuestStorageKey = 'coin-islands.daily-quests.v2'
 const initialSkinCoins = 860
 
 const skinItemsById = new Map(skinSeries.flatMap((series) => series.items.map((item) => [item.id, item])))
@@ -853,7 +854,13 @@ function writeWalletStorage(value: string) {
 }
 
 function sanitizePersistedWalletState(state: PersistedWalletState): PersistedWalletState {
-  const islands = state.islands.filter((island) => !island.id.startsWith('test-'))
+  const islands = state.islands.filter((island) => {
+    const isGeneratedEmptyDemo =
+      /^新营地岛\s+\d+$/.test(island.name) &&
+      island.balance === 0 &&
+      (island.tokenBalances ?? []).every((balance) => Number(balance.value) === 0)
+    return !island.id.startsWith('test-') && !isGeneratedEmptyDemo
+  })
   const islandIds = new Set(islands.map((island) => island.id))
 
   return {
@@ -1012,53 +1019,126 @@ function islandRect(island: Island) {
   }
 }
 
-function rectGap(a: ReturnType<typeof islandRect>, b: ReturnType<typeof islandRect>) {
-  const horizontalGap = Math.max(0, Math.max(a.left - b.right, b.left - a.right))
-  const verticalGap = Math.max(0, Math.max(a.top - b.bottom, b.top - a.bottom))
-
-  if (horizontalGap === 0 && verticalGap === 0) {
-    return 0
+function mapWorldScale(count: number) {
+  if (count <= 1) {
+    return 1.04
   }
 
-  return Math.hypot(horizontalGap, verticalGap)
-}
-
-function candidatePlacements(index: number, width: number) {
-  const base = islandPlacements.map((placement) => ({
-    ...placement,
-    width,
-  }))
-  const grid = []
-
-  for (let y = 10; y <= 72; y += 12) {
-    for (let x = 6; x <= 78; x += 14) {
-      grid.push({ width, x: Math.min(80, x + (index % 3) * 2), y })
-    }
+  if (count <= 3) {
+    return 1.14 + (count - 1) * 0.1
   }
 
-  return [...base.slice(index), ...base.slice(0, index), ...grid]
+  return Math.min(2.9, 1.34 + (count - 3) * 0.16)
 }
 
-function hasMinimumIslandGap(candidate: Island, placed: Island[]) {
-  const candidateRect = islandRect(candidate)
-  return placed.every(
-    (island) => rectGap(candidateRect, islandRect(island)) >= islandLayoutBounds.minGap,
-  )
+function mapCameraScale(count: number) {
+  if (count <= 1) {
+    return 1.2
+  }
+
+  if (count <= 3) {
+    return 1.13 - (count - 1) * 0.055
+  }
+
+  return Math.max(0.62, 1.02 - (count - 3) * 0.045)
 }
 
-function layoutIslandsWithGap(islands: Island[]) {
+function islandRenderWidth(island: Island, worldScale: number, cameraScale: number) {
+  return (island.width * islandVisualScale) / worldScale / cameraScale
+}
+
+function islandCircle(island: Island, worldScale: number, cameraScale: number) {
+  const width = (islandRenderWidth(island, worldScale, cameraScale) / 100) *
+    islandLayoutBounds.width *
+    worldScale
+  const visualHeight = width * 0.92
+
+  return {
+    radius: Math.max(width, visualHeight) / 2,
+    x: (island.x / 100) * islandLayoutBounds.width + width / 2,
+    y: (island.y / 100) * islandLayoutBounds.height + visualHeight / 2,
+  }
+}
+
+function circleDistance(a: ReturnType<typeof islandCircle>, b: ReturnType<typeof islandCircle>) {
+  return Math.hypot(a.x - b.x, a.y - b.y)
+}
+
+function seededLayoutRandom(seed: number) {
+  let value = seed >>> 0
+  return () => {
+    value += 0x6d2b79f5
+    let next = value
+    next = Math.imul(next ^ (next >>> 15), next | 1)
+    next ^= next + Math.imul(next ^ (next >>> 7), next | 61)
+    return ((next ^ (next >>> 14)) >>> 0) / 4294967296
+  }
+}
+
+function islandSeed(island: Island, index: number) {
+  const source = `${island.id}:${island.name}:${index}`
+  return Array.from(source).reduce((hash, char) => (hash * 31 + char.charCodeAt(0)) >>> 0, 2166136261)
+}
+
+function hasMinimumIslandGap(
+  candidate: Island,
+  placed: Island[],
+  worldScale: number,
+  cameraScale: number,
+) {
+  const candidateCircle = islandCircle(candidate, worldScale, cameraScale)
+  return placed.every((island) => {
+    const circle = islandCircle(island, worldScale, cameraScale)
+    const requiredGap =
+      candidateCircle.radius + circle.radius + islandLayoutBounds.minGap / cameraScale
+    return circleDistance(candidateCircle, circle) >= requiredGap
+  })
+}
+
+function layoutIslandsWithGap(islands: Island[], worldScale: number, cameraScale: number) {
   const placed: Island[] = []
 
-  for (const island of islands) {
+  for (const [index, island] of islands.entries()) {
+    const random = seededLayoutRandom(islandSeed(island, index))
+    const renderWidth = islandRenderWidth(island, worldScale, cameraScale)
     let nextIsland = island
+    let bestIsland = nextIsland
+    let bestGap = -Infinity
 
-    if (!hasMinimumIslandGap(nextIsland, placed)) {
-      const placement = candidatePlacements(placed.length, island.width).find((candidate) =>
-        hasMinimumIslandGap({ ...island, ...candidate }, placed),
-      )
+    for (let attempt = 0; attempt < 180; attempt += 1) {
+      const candidate = {
+        ...nextIsland,
+        x: random() * Math.max(1, 96 - renderWidth),
+        y: 4 + random() * 62,
+      }
 
-      if (placement) {
-        nextIsland = { ...island, ...placement }
+      if (hasMinimumIslandGap(candidate, placed, worldScale, cameraScale)) {
+        nextIsland = candidate
+        break
+      }
+
+      const candidateCircle = islandCircle(candidate, worldScale, cameraScale)
+      const nearestGap =
+        placed.length === 0
+          ? Infinity
+          : Math.min(
+              ...placed.map((placedIsland) => {
+                const placedCircle = islandCircle(placedIsland, worldScale, cameraScale)
+                return (
+                  circleDistance(candidateCircle, placedCircle) -
+                  candidateCircle.radius -
+                  placedCircle.radius
+                )
+              }),
+            )
+
+      if (nearestGap > bestGap) {
+        bestGap = nearestGap
+        bestIsland = candidate
+      }
+
+      if (attempt === 179) {
+        nextIsland = bestIsland
       }
     }
 
@@ -1652,9 +1732,9 @@ function WalletDashboard() {
   }
 
   return (
-    <section className="coin-islands-app mx-auto flex w-full max-w-6xl flex-col items-center gap-5">
-      <div className="coin-islands-phone relative w-full max-w-[520px] overflow-hidden rounded-3xl border border-border bg-surface-blue shadow-[var(--shadow-card-lg)]">
-        <div className="relative aspect-[9/16] min-h-[720px] overflow-hidden">
+    <section className="coin-islands-app flex h-full w-full items-center justify-center">
+      <div className="coin-islands-phone relative overflow-hidden rounded-3xl border border-border bg-surface-blue shadow-[var(--shadow-card-lg)]">
+        <div className="coin-islands-stage relative h-full overflow-hidden">
           <div className="relative h-full overflow-hidden">
             <ViewPane active={activeView === 'assets'}>
               <AssetsView
@@ -1758,22 +1838,50 @@ function ViewPane({ active, children }: { active: boolean; children: ReactNode }
 }
 
 function GameplayIntroBanner({ onClose }: { onClose: () => void }) {
+  const evolutionSteps = [
+    { image: islandCamp, label: '小型初始岛屿' },
+    { image: islandVillage, label: '中型村落岛屿' },
+    { image: islandCitadel, label: '大型城邦岛屿' },
+  ]
+
   return (
-    <div className="absolute inset-x-4 top-5 z-[95] rounded-2xl border border-[#b8e7ff]/70 bg-[#0b65c8]/88 p-4 text-[#effaff] shadow-[0_18px_34px_rgba(2,24,77,0.34),inset_0_1px_0_rgba(255,255,255,0.42)] backdrop-blur-xl">
-      <div className="flex items-start justify-between gap-3">
-        <div>
+    <div className="absolute inset-x-3 top-4 z-[95] rounded-2xl border border-[#b8e7ff]/70 bg-[#0b65c8]/88 p-3 text-[#effaff] shadow-[0_18px_34px_rgba(2,24,77,0.34),inset_0_1px_0_rgba(255,255,255,0.42)] backdrop-blur-xl sm:inset-x-4 sm:top-5 sm:p-4">
+      <div className="flex items-start gap-3">
+        <div className="min-w-0 flex-1 pr-1">
           <div className="text-title-sm font-black">My Island 核心玩法</div>
           <p className="mt-2 text-body-sm font-bold leading-6 text-[#dcf6ff]">
             创建钱包生成岛屿；账户总价值以 U 计算，并推动岛屿成长为小型、中型、大型。转账和收款会形成本地航线记录。每日任务产出岛币，岛币只用于购买和使用节日岛屿皮肤。
           </p>
+          <div className="mt-3 grid grid-cols-[1fr_auto_1fr_auto_1fr] items-center gap-1.5 rounded-xl border border-[#b8e7ff]/45 bg-white/14 p-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.22)]">
+            {evolutionSteps.map((step, index) => (
+              <Fragment key={step.label}>
+                <div className="min-w-0 rounded-lg border border-white/35 bg-[#063f92]/45 px-1.5 py-2 text-center shadow-[inset_0_1px_0_rgba(255,255,255,0.24)]">
+                  <img
+                    src={step.image}
+                    alt=""
+                    className="mx-auto h-14 w-full object-contain drop-shadow-[0_6px_8px_rgba(0,0,0,0.3)]"
+                    draggable={false}
+                  />
+                  <div className="mt-1 truncate text-[10px] font-black leading-4 text-[#effaff] sm:text-caption">
+                    {step.label}
+                  </div>
+                </div>
+                {index < evolutionSteps.length - 1 ? (
+                  <div className="text-body-lg font-black text-[#ffe9a8]">
+                    →
+                  </div>
+                ) : null}
+              </Fragment>
+            ))}
+          </div>
         </div>
         <button
           aria-label="关闭玩法说明"
-          className="shrink-0 rounded-lg border border-white/45 bg-white/18 px-3 py-2 text-caption font-black text-[#effaff] shadow-[inset_0_1px_0_rgba(255,255,255,0.35)] backdrop-blur-md"
+          className="shrink-0 rounded-lg border border-white/45 bg-white/18 px-2.5 py-2 text-caption font-black text-[#effaff] shadow-[inset_0_1px_0_rgba(255,255,255,0.35)] backdrop-blur-md sm:px-3"
           onClick={onClose}
           type="button"
         >
-          我知道了
+          知道
         </button>
       </div>
     </div>
@@ -1832,9 +1940,8 @@ function AssetsView({
   onSelectIsland: (selection: IslandDetailSelection) => void
 }) {
   return (
-    <OceanPage className="flex h-full min-h-0 flex-col p-4 pb-36 sm:p-5 sm:pb-36">
-      <div className="shrink-0">
-        <div className="flex items-start justify-between gap-3">
+    <OceanPage className="no-scrollbar h-full overflow-y-auto p-4 pb-28 sm:p-6">
+      <div className="flex items-start justify-between gap-3">
         <PanelHeader
           eyebrow="账户展示"
           title="资产岛屿"
@@ -1852,9 +1959,8 @@ function AssetsView({
             转账
           </Button>
         </div>
-        </div>
       </div>
-      <div className="no-scrollbar mt-4 min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
+      <div className="mt-4 space-y-3">
         {islands.length === 0 ? (
           <div className="rounded-2xl border border-white/45 bg-white/24 p-5 text-body-sm leading-6 text-[#e9fbff] shadow-[0_8px_24px_rgba(76,50,25,0.12)] backdrop-blur-md">
             当前还没有岛屿钱包。点击右上角“创建钱包”，生成第一个本地钱包后会自动新增岛屿。
@@ -1918,15 +2024,13 @@ function RoutesView({
     .filter((group) => group.items.length > 0)
 
   return (
-    <OceanPage className="flex h-full min-h-0 flex-col p-4 pb-36 sm:p-5 sm:pb-36">
-      <div className="shrink-0">
-        <PanelHeader
-          eyebrow="航海记录"
-          title="今日流入流出"
-          description="按照时间排序，并按每座岛礁账户归类。"
-        />
-      </div>
-      <div className="no-scrollbar mt-4 min-h-0 flex-1 overflow-y-auto pr-1">
+    <OceanPage className="no-scrollbar h-full overflow-y-auto p-4 pb-28 sm:p-6">
+      <PanelHeader
+        eyebrow="航海记录"
+        title="今日流入流出"
+        description="按照时间排序，并按每座岛礁账户归类。"
+      />
+      <div className="mt-4">
         <div className="rounded-2xl border border-white/50 bg-white/24 p-3 shadow-[0_10px_28px_rgba(93,62,28,0.14),inset_0_1px_0_rgba(255,255,255,0.44)] backdrop-blur-md">
           <div className="text-body-md font-bold text-foreground">时间线</div>
           <div className="mt-3 space-y-2">
@@ -1981,23 +2085,29 @@ function IslandMapView({
   onOpenSend: () => void
   onSelectIsland: (selection: IslandDetailSelection) => void
 }) {
-  const laidOutIslands = useMemo(() => layoutIslandsWithGap(islands), [islands])
+  const worldScale = mapWorldScale(islands.length)
+  const cameraScale = mapCameraScale(islands.length) / Math.sqrt(worldScale)
+  const laidOutIslands = useMemo(
+    () => layoutIslandsWithGap(islands, worldScale, cameraScale),
+    [cameraScale, islands, worldScale],
+  )
   const sailboatRef = useSailboatMotion(laidOutIslands)
   const weather = useWeatherCycle()
-  const [mapScale, setMapScale] = useState(1)
+  const [zoomDelta, setZoomDelta] = useState(0)
+  const mapScale = cameraScale + zoomDelta
   const [mapOffset, setMapOffset] = useState({ x: 0, y: 0 })
   const mapViewportRef = useRef<HTMLDivElement | null>(null)
   const dragRef = useRef<{ pointerId: number; startX: number; startY: number; x: number; y: number } | null>(null)
-  const canMoveMap = laidOutIslands.length > 4 || mapScale > 1
+  const canMoveMap = laidOutIslands.length > 4 || worldScale > 1
 
   const clampOffset = (offset: { x: number; y: number }, scale = mapScale) => {
     const viewport = mapViewportRef.current
     if (!viewport) {
-      return scale <= 1 ? { x: 0, y: 0 } : offset
+      return worldScale <= 1 && scale >= 1 ? { x: 0, y: 0 } : offset
     }
 
-    const mapWidth = viewport.clientWidth * scale
-    const mapHeight = viewport.clientHeight * scale
+    const mapWidth = viewport.clientWidth * worldScale * scale
+    const mapHeight = viewport.clientHeight * worldScale * scale
     const maxX = Math.max(0, (mapWidth - viewport.clientWidth) / 2)
     const maxY = Math.max(0, (mapHeight - viewport.clientHeight) / 2)
 
@@ -2008,10 +2118,15 @@ function IslandMapView({
   }
 
   const setZoom = (nextScale: number) => {
-    const scale = Math.min(Math.max(nextScale, 1), 1.65)
-    setMapScale(scale)
+    const scale = Math.min(Math.max(nextScale, Math.max(0.62, cameraScale - 0.14)), 1.65)
+    setZoomDelta(scale - cameraScale)
     setMapOffset((current) => clampOffset(current, scale))
   }
+
+  useEffect(() => {
+    setZoomDelta(0)
+    setMapOffset((current) => clampOffset(current, cameraScale))
+  }, [cameraScale, worldScale])
 
   useEffect(() => {
     const viewport = mapViewportRef.current
@@ -2030,7 +2145,7 @@ function IslandMapView({
   return (
     <div
       ref={mapViewportRef}
-      className="relative h-full overflow-hidden bg-primary"
+      className="coin-islands-map relative h-full overflow-hidden bg-primary"
       onWheel={(event) => {
         event.preventDefault()
         setZoom(mapScale + (event.deltaY > 0 ? -0.08 : 0.08))
@@ -2038,10 +2153,12 @@ function IslandMapView({
     >
       <div
         className={canMoveMap ? 'absolute inset-0 cursor-grab active:cursor-grabbing' : 'absolute inset-0'}
+        onDragStart={(event) => event.preventDefault()}
         onPointerDown={(event) => {
           if (!canMoveMap) {
             return
           }
+          event.preventDefault()
           if ((event.target as HTMLElement).closest('button, input, select, textarea, a')) {
             return
           }
@@ -2074,15 +2191,14 @@ function IslandMapView({
         style={{
           transform: `translate3d(${mapOffset.x}px, ${mapOffset.y}px, 0) scale(${mapScale})`,
           transformOrigin: '50% 50%',
+          height: `${worldScale * 100}%`,
+          left: `${(1 - worldScale) * 50}%`,
+          top: `${(1 - worldScale) * 50}%`,
+          width: `${worldScale * 100}%`,
         }}
       >
-        <div
-          aria-hidden="true"
-          className="absolute inset-0 bg-cover bg-center opacity-75"
-          style={{ backgroundImage: `url(${oceanIslandsMap})` }}
-        />
         <img
-          src={oceanIslandsMap}
+          src={oceanWorldMap}
           alt=""
           className="absolute inset-0 h-full w-full object-cover object-center"
           decoding="sync"
@@ -2135,11 +2251,17 @@ function IslandMapView({
           className="group absolute z-40 flex flex-col items-center text-left transition-transform duration-300 hover:-translate-y-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           key={island.id}
           onClick={(event) => onSelectIsland(selectionFromElement(island, event.currentTarget))}
-          style={{ left: `${island.x}%`, top: `${island.y}%`, width: `${island.width}%` }}
+          style={{
+            left: `${island.x}%`,
+            top: `${island.y}%`,
+            width: `${islandRenderWidth(island, worldScale, cameraScale)}%`,
+          }}
           type="button"
         >
-          <span className="mb-1 rounded-xl border border-primary/30 bg-dark-surface/80 px-3 py-2 text-primary-foreground shadow-[var(--shadow-card)] backdrop-blur-sm transition-transform duration-300 group-hover:scale-105">
-            <span className="block text-body-sm font-bold">{island.name}</span>
+          <span className="mb-1.5 max-w-[150%] rounded-lg border border-primary/30 bg-dark-surface/84 px-2.5 py-1.5 text-primary-foreground shadow-[var(--shadow-card)] backdrop-blur-sm transition-transform duration-300 group-hover:scale-105">
+            <span className="block max-w-32 truncate text-caption font-black leading-5 sm:max-w-36 sm:text-body-sm">
+              {island.name}
+            </span>
           </span>
           <img
             src={island.sprite}
@@ -2162,7 +2284,7 @@ function IslandMapView({
       ) : null}
       <button
         aria-label="收款码头"
-        className="coin-dock-action group absolute right-[3%] top-[8%] z-50 w-[17%] border-0 bg-transparent p-0 text-primary-foreground drop-shadow-[0_12px_18px_rgba(0,0,0,0.38)] transition-transform hover:-translate-y-1 hover:scale-[1.03] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        className="coin-dock-action group absolute right-[3%] top-[8%] z-50 w-[22%] border-0 bg-transparent p-0 text-primary-foreground drop-shadow-[0_16px_22px_rgba(0,0,0,0.48)] transition-transform hover:-translate-y-1 hover:scale-[1.04] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         onClick={onOpenReceive}
         onPointerDown={(event) => event.stopPropagation()}
         type="button"
@@ -2175,7 +2297,7 @@ function IslandMapView({
           draggable={false}
           loading="eager"
         />
-        <span className="absolute left-1/2 top-[78%] -translate-x-1/2 whitespace-nowrap rounded-md border border-[#f7d48c]/60 bg-[#2b1608]/78 px-2 py-1 text-caption font-bold text-[#ffe9a8] shadow-[0_3px_0_rgba(55,28,8,0.55)] opacity-95 transition-opacity group-hover:opacity-100">
+        <span className="absolute left-1/2 top-[78%] -translate-x-1/2 whitespace-nowrap rounded-lg border-2 border-[#f7d48c]/75 bg-[#2b1608]/88 px-3 py-1.5 text-body-sm font-black text-[#ffe9a8] shadow-[0_4px_0_rgba(55,28,8,0.65),0_10px_18px_rgba(0,0,0,0.35)] opacity-100 transition-opacity group-hover:opacity-100">
           收款码头
         </span>
       </button>
@@ -2195,7 +2317,7 @@ function IslandMapView({
           draggable={false}
           loading="eager"
         />
-        <span className="absolute left-1/2 top-[77%] -translate-x-1/2 whitespace-nowrap rounded-md border border-[#f7d48c]/60 bg-[#2b1608]/78 px-2 py-1 text-caption font-bold text-[#ffe9a8] shadow-[0_3px_0_rgba(55,28,8,0.55)] opacity-95 transition-opacity group-hover:opacity-100">
+        <span className="absolute left-1/2 top-[77%] -translate-x-1/2 whitespace-nowrap rounded-lg border-2 border-[#f7d48c]/75 bg-[#2b1608]/88 px-3 py-1.5 text-body-sm font-black text-[#ffe9a8] shadow-[0_4px_0_rgba(55,28,8,0.65),0_10px_18px_rgba(0,0,0,0.35)] opacity-100 transition-opacity group-hover:opacity-100">
           转账船坞
         </span>
       </button>
@@ -2308,7 +2430,7 @@ function WeatherLayer({ weather }: { weather: WeatherEvent | null }) {
   return (
     <img
       alt=""
-      className="coin-weather-event pointer-events-none absolute z-[35] object-contain drop-shadow-[0_10px_16px_rgba(8,33,70,0.25)]"
+      className="coin-weather-event pointer-events-none absolute z-[60] object-contain drop-shadow-[0_10px_16px_rgba(8,33,70,0.25)]"
       decoding="async"
       draggable={false}
       key={weather.id}
@@ -3178,7 +3300,7 @@ function BottomNav({
   onChange: (view: ViewId) => void
 }) {
   return (
-    <div className="coin-glass-nav absolute inset-x-4 bottom-4 z-50 grid grid-cols-5 items-end gap-1 px-2 py-2">
+    <div className="coin-glass-nav absolute inset-x-2 bottom-3 z-50 grid grid-cols-5 items-end gap-0.5 px-1.5 py-1.5 sm:inset-x-4 sm:bottom-4 sm:gap-1 sm:px-2 sm:py-2">
       {items.map((item) => {
         const active = item.id === activeView
 
@@ -3187,17 +3309,17 @@ function BottomNav({
             aria-pressed={active}
             className={
               active
-                ? 'coin-glass-nav-item coin-glass-nav-item-active flex -translate-y-3 flex-col items-center gap-1 px-2 py-2 text-[#09334a]'
-                : 'coin-glass-nav-item flex flex-col items-center gap-1 px-2 py-2 text-[#315468] transition-transform hover:-translate-y-1'
+                ? 'coin-glass-nav-item coin-glass-nav-item-active flex -translate-y-2 flex-col items-center gap-0.5 px-1 py-1.5 text-[#09334a] sm:-translate-y-3 sm:gap-1 sm:px-2 sm:py-2'
+                : 'coin-glass-nav-item flex flex-col items-center gap-0.5 px-1 py-1.5 text-[#315468] transition-transform hover:-translate-y-1 sm:gap-1 sm:px-2 sm:py-2'
             }
             key={item.id}
             onClick={() => onChange(item.id)}
             type="button"
           >
             <span className="coin-glass-icon">
-              <img src={item.icon} alt="" className="h-9 w-9 object-contain" />
+              <img src={item.icon} alt="" className="h-7 w-7 object-contain sm:h-9 sm:w-9" />
             </span>
-            <span className="text-body-sm font-bold">{item.label}</span>
+            <span className="text-caption font-bold sm:text-body-sm">{item.label}</span>
           </button>
         )
       })}
