@@ -932,6 +932,15 @@ function formatUsdValue(value: number) {
   })} U`
 }
 
+function tokenBalanceLabel(island: Island | undefined, token: string) {
+  if (!island) {
+    return `0 ${token}`
+  }
+
+  const balance = island.tokenBalances?.find((item) => item.symbol === token)
+  return `${balance?.value ?? '0'} ${token}`
+}
+
 function nextRefreshDelay() {
   return 2000 + Math.floor(Math.random() * 3000)
 }
@@ -1585,10 +1594,17 @@ function WalletDashboard() {
         unlockKey: source.saferPro.unlockKey,
         value: bnbParams?.value,
       })
-      const broadcastHash =
-        sendForm.chain === 'BNB Chain'
-          ? await broadcastBnbRawTransaction(signed.signature)
-          : undefined
+      let broadcastHash: string | undefined
+      let broadcastError = ''
+
+      if (sendForm.chain === 'BNB Chain') {
+        try {
+          broadcastHash = await broadcastBnbRawTransaction(signed.signature)
+        } catch (error) {
+          broadcastError = error instanceof Error ? error.message : '广播失败，已保留本地签名记录。'
+        }
+      }
+
       const result = broadcastHash ? { ...signed, broadcastHash } : signed
       completeTransactionQuests({
         chain: sendForm.chain,
@@ -1605,11 +1621,15 @@ function WalletDashboard() {
           counterparty: broadcastHash ?? signed.txHash,
           amount: `-${sendForm.amount} ${sendForm.token}`,
           direction: 'out',
-          status: sendForm.toAddress.startsWith('im') ? 'completed' : 'risk',
+          status: broadcastError ? 'pending' : sendForm.toAddress.startsWith('im') ? 'completed' : 'risk',
         },
         ...current,
       ])
-      setSigningState({ result, status: 'signed' })
+      setSigningState(
+        broadcastError
+          ? { error: broadcastError, result, status: 'signed' }
+          : { result, status: 'signed' },
+      )
       setActiveView('routes')
       setActiveModal(null)
     } catch (error) {
@@ -1921,7 +1941,9 @@ function RoutesView({
                 <img src={group.island.sprite} alt="" className="h-14 w-16 object-contain" />
                 <div>
                   <div className="text-body-md font-bold text-foreground">{group.island.name}</div>
-                  <div className="text-caption text-muted-foreground">{group.island.balanceLabel}</div>
+                  <div className="text-caption text-muted-foreground">
+                    {formatUsdValue(islandUsdValue(group.island))}
+                  </div>
                 </div>
               </div>
               <div className="mt-3 space-y-2">
@@ -2670,12 +2692,18 @@ function WalletModalLayer({
 
         {modalKind === 'send' ? (
           <div className="space-y-4 pb-2">
+            <div className="rounded-xl border border-[#9b6330]/30 bg-[#fff8df]/56 px-3 py-2 text-caption font-black text-[#6b4a24]">
+              当前余额：{tokenBalanceLabel(
+                islands.find((island) => island.id === sendForm.fromIslandId),
+                sendForm.token,
+              )}
+            </div>
             <SelectField
               label="付款岛屿"
               value={sendForm.fromIslandId}
               onChange={(value) => onSendFormChange((form) => ({ ...form, fromIslandId: value }))}
               options={islands.map((island) => ({
-                label: `${island.name} · ${island.balanceLabel}`,
+                label: `${island.name} · ${tokenBalanceLabel(island, sendForm.token)}`,
                 value: island.id,
               }))}
             />
@@ -3036,7 +3064,7 @@ function ProfileView({ hudStats }: { hudStats: HudStat[] }) {
         ))}
       </div>
       <div className="mt-5 grid gap-4 lg:grid-cols-3">
-        <ProfileMetric label="今日净流入" value="+242 岛币" />
+        <ProfileMetric label="今日净流入" value="+0.00 U" />
         <ProfileMetric label="已点亮等级" value="3 / 4" />
         <ProfileMetric label="可用装饰币" value="486 岛币" />
       </div>

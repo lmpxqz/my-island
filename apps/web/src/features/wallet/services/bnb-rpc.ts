@@ -163,7 +163,8 @@ async function getBnbTxParams(address: string, token: string, toAddress: string,
 }
 
 async function broadcastBnbRawTransaction(rawTransaction: string) {
-  return bnbRpc<string>('eth_sendRawTransaction', [rawTransaction])
+  const normalized = rawTransaction.startsWith('0x') ? rawTransaction : `0x${rawTransaction}`
+  return bnbRpc<string>('eth_sendRawTransaction', [normalized])
 }
 
 export {
