@@ -5,8 +5,8 @@
 Coin Islands Wallet 是基于 `token-ui` 改造的像素海岛钱包原型。它把传统钱包里的账户、资产、收款、转账、交易记录重新组织成“群岛”体验：
 
 - 每个钱包账户是一座岛屿。
-- 收款入口是右上角码头小岛。
-- 转账入口是海面上缓慢漂浮的帆船。
+- 收款入口是默认首屏内的码头小岛，尺寸接近最小号账户岛。
+- 转账入口是海面上缓慢漂浮的小帆船，尺寸小于最小号账户岛。
 - 资产页展示钱包账户与余额状态。
 - 航线页展示账本与交易日志。
 - 创建钱包、派生地址、签名交易基于 `@consenlabs/tcx-wasm`。
@@ -36,13 +36,16 @@ Coin Islands Wallet 是基于 `token-ui` 改造的像素海岛钱包原型。它
 
 本地状态：
 
-- `coin-islands.wallet-state.v1`
+- `coin-islands.wallet-state.v5`
 - 保存内容：岛屿账户列表、SaferPro/tcx-wasm keystore、交易日志。
+- `v5` 是当前账户状态版本；旧版 `v1` / `v2` / `v3` / `v4` 缓存不再作为当前账户来源读取，相当于重置旧本地账户信息。
 
 主要视觉资源：
 
-- `apps/web/src/assets/coin-islands/backgrounds/ocean-islands-map.png`
+- `apps/web/src/assets/coin-islands/backgrounds/ocean-world-map.jpg`
+- `apps/web/src/assets/coin-islands/backgrounds/ocean-page-bg.png`
 - `apps/web/src/assets/coin-islands/sprites/*`
+- `apps/web/src/assets/coin-islands/weather/*`
 - `apps/web/src/assets/coin-islands/ui/scroll-panel-cutout.png`
 
 ## 3. 页面结构
@@ -85,15 +88,23 @@ Coin Islands Wallet 是基于 `token-ui` 改造的像素海岛钱包原型。它
 
 功能：
 
-- 主视图为大海和岛屿地图。
+- 主视图为一张原始世界海图画布，资源为 `ocean-world-map.jpg`，图片尺寸为 `1672x941`。
+- 世界海图本身大于手机屏幕显示区域，海图、岛屿、码头、帆船处于同一个可拖动地图层。
 - 岛屿代表钱包账户。
-- 右上角码头小岛打开收款弹窗。
+- 收款码头位于默认首屏显示范围内，打开收款弹窗。
 - 海面帆船打开转账弹窗。
-- 测试阶段固定保留 1 座大型岛、2 座中型岛、3 座小型岛，用于展示布局、缩放和详情页。
-- 本地缓存会过滤额外旧岛屿，保证海岛页只显示这 6 座测试岛。
-- 海岛渲染前会执行间距布局算法，岛屿外接框之间至少保留 20px。
-- 岛屿较多或用户缩放后，地图支持拖拽平移和按钮缩放。
+- 地图支持拖拽平移和按钮缩放，拖动时世界地图与固定在地图坐标上的岛屿一起移动。
 - 点击任意岛屿会打开二级资产页，展示该岛屿钱包内的代币和金额。
+
+岛屿生成与分布规则：
+
+- 岛屿不是网格排列，而是带固定种子的随机分布；同一组账户在刷新后会保持稳定位置。
+- 默认先在世界地图中心的主显示区域生成岛屿，这个区域也是用户进入海岛页后最先看到的范围。
+- 主显示区域放不下时，生成区域以现有岛群为中心，按圈层向左右逐步扩展。
+- 扩展仍然使用随机投放，但每次落点都必须通过海洋间距检测。
+- 间距检测基于岛屿渲染外接框，岛与岛之间必须保留明显海洋距离，不能互相接触。
+- 最小号账户岛约等于 `camp` 岛尺寸；收款码头接近最小岛尺寸，转账帆船小于最小岛。
+- 当前世界画布默认不额外放大，岛屿尺寸通过 `islandVisualScale` 控制。
 
 帆船运动：
 
@@ -105,9 +116,8 @@ Coin Islands Wallet 是基于 `token-ui` 改造的像素海岛钱包原型。它
 天气层：
 
 - 天气资源位于 `apps/web/src/assets/coin-islands/weather/*`。
-- 支持晴天、多云、雪、雨、雷暴五种天气。
-- 晴天和多云权重最高，雨雪雷暴低概率出现。
-- 天气层约占屏幕顶部五分之一，并可通过多张云层叠加形成组合感。
+- 支持晴天、雨、雷暴三类天气事件。
+- 天气事件位于可拖动地图层内，使用地图百分比定位，随世界海图一起移动。
 - 天气会按随机时间间隔自动变化。
 
 ### 3.4 探索页
@@ -249,10 +259,9 @@ RPC 端点：
 
 常用命令：
 
-```powershell
-$env:PATH='C:\Program Files\Adobe\Adobe Creative Cloud Experience\libs;' + $env:PATH
-& .\node_modules\.bin\tsc.CMD --noEmit
-& .\node_modules\.bin\vitest.CMD run
+```bash
+pnpm --filter @repo/web test
+pnpm --filter @repo/web typecheck
 ```
 
 ## 10. 后续建议

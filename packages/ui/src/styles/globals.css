@@ -878,8 +878,8 @@
 }
 
 .coin-sail-action {
-  left: var(--sail-x, 34%);
-  top: var(--sail-y, 40%);
+  left: var(--sail-x, 54%);
+  top: var(--sail-y, 30%);
   transform-origin: 50% 72%;
   transition: filter 180ms var(--ease-emphasis);
   will-change: left, top;

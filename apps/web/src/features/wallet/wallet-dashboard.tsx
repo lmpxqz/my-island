@@ -86,6 +86,7 @@ interface IslandDetailSelection {
 }
 
 interface TokenBalance {
+  raw?: string
   symbol: string
   value: string
 }
@@ -264,12 +265,17 @@ const islandPlacements = [
   { width: 24, x: 42, y: 12 },
 ]
 
-const islandLayoutBounds = {
-  height: 720,
-  minGap: 42,
-  width: 520,
+const worldMapAspectRatio = 1672 / 941
+const worldMapHeightScale = 1.36
+const defaultMapOffsetXRatio = 0.15
+const islandVisualScale = 0.55
+const primaryIslandSpawnArea = {
+  bottom: 86,
+  left: 36,
+  right: 64,
+  top: 32,
 }
-const islandVisualScale = 1.72
+const islandSpawnExpansionStep = 10
 
 const initialIslands: Island[] = []
 
@@ -653,20 +659,34 @@ const islandDetailBackgrounds: Record<IslandLevel, string> = {
   citadel: islandDetailCitadel,
 }
 
-const walletStorageKey = 'coin-islands.wallet-state.v2'
+const walletStorageKey = 'coin-islands.wallet-state.v5'
+const walletStorageKeys = [
+  'coin-islands.wallet-state.v1',
+  'coin-islands.wallet-state.v2',
+  'coin-islands.wallet-state.v3',
+  'coin-islands.wallet-state.v4',
+  walletStorageKey,
+]
 const skinMarketStorageKey = 'coin-islands.skin-market.v2'
 const dailyQuestStorageKey = 'coin-islands.daily-quests.v2'
+const appResetStorageKeys = [
+  ...walletStorageKeys,
+  skinMarketStorageKey,
+  dailyQuestStorageKey,
+  gameplayIntroStorageKey,
+]
 const initialSkinCoins = 860
 
-const skinItemsById = new Map(skinSeries.flatMap((series) => series.items.map((item) => [item.id, item])))
+const skinItemsById = new Map(
+  skinSeries.flatMap((series) => series.items.map((item) => [item.id, item])),
+)
 const exploreQuestById = new Map(exploreQuestPool.map((quest) => [quest.id, quest]))
 
-function applyEquippedSkins(
-  islands: Island[],
-  equipped: Partial<Record<IslandLevel, string>>,
-) {
+function applyEquippedSkins(islands: Island[], equipped: Partial<Record<IslandLevel, string>>) {
   return islands.map((island) => {
-    const skin = equipped[island.level] ? skinItemsById.get(equipped[island.level] ?? '') : undefined
+    const skin = equipped[island.level]
+      ? skinItemsById.get(equipped[island.level] ?? '')
+      : undefined
     return skin ? { ...island, sprite: skin.image } : island
   })
 }
@@ -739,6 +759,38 @@ function writeGameplayIntroDismissed() {
   }
 }
 
+function clearWalletStorage() {
+  if (typeof window === 'undefined') {
+    return
+  }
+
+  try {
+    for (const key of appResetStorageKeys) {
+      window.localStorage?.removeItem(key)
+    }
+  } catch {
+    // Ignore storage failures; the in-memory state will still reset on this load.
+  }
+
+  try {
+    const windowNameState = JSON.parse(window.name || '{}') as Record<string, string>
+    for (const key of appResetStorageKeys) {
+      delete windowNameState[key]
+    }
+    window.name = JSON.stringify(windowNameState)
+  } catch {
+    window.name = ''
+  }
+}
+
+function shouldResetWalletStorage() {
+  if (typeof window === 'undefined') {
+    return false
+  }
+
+  return new URLSearchParams(window.location.search).get('resetWallet') === '1'
+}
+
 function readWalletStorage() {
   if (typeof window === 'undefined') {
     return null
@@ -768,9 +820,7 @@ function readSkinMarketStorage() {
 
   try {
     const value = window.localStorage?.getItem(skinMarketStorageKey)
-    return value
-      ? (JSON.parse(value) as Partial<SkinMarketState>)
-      : null
+    return value ? (JSON.parse(value) as Partial<SkinMarketState>) : null
   } catch {
     return null
   }
@@ -875,6 +925,11 @@ function loadPersistedWalletState(): PersistedWalletState | null {
     return null
   }
 
+  if (shouldResetWalletStorage()) {
+    clearWalletStorage()
+    return null
+  }
+
   try {
     const raw = readWalletStorage()
     if (!raw) {
@@ -882,7 +937,11 @@ function loadPersistedWalletState(): PersistedWalletState | null {
     }
 
     const parsed = JSON.parse(raw) as Partial<PersistedWalletState>
-    if (parsed.version !== 1 || !Array.isArray(parsed.islands) || !Array.isArray(parsed.transactions)) {
+    if (
+      parsed.version !== 1 ||
+      !Array.isArray(parsed.islands) ||
+      !Array.isArray(parsed.transactions)
+    ) {
       return null
     }
 
@@ -952,6 +1011,94 @@ function tokenBalanceLabel(island: Island | undefined, token: string) {
   return `${balance?.value ?? '0'} ${token}`
 }
 
+function tokenBalanceAmount(value: string | undefined) {
+  const amount = Number((value ?? '0').replace(/,/g, ''))
+  return Number.isFinite(amount) ? amount : 0
+}
+
+function formatTokenAmount(value: number, symbol: string) {
+  const precision = symbol === 'BNB' ? 8 : 4
+  return value.toLocaleString('en-US', {
+    maximumFractionDigits: precision,
+    minimumFractionDigits: 0,
+  })
+}
+
+function bnbSnapshotTokenBalances(snapshot: Awaited<ReturnType<typeof getBnbAccountSnapshot>>) {
+  return [
+    { raw: snapshot.bnb.raw, symbol: 'BNB', value: snapshot.bnb.value },
+    { raw: snapshot.usdt.raw, symbol: 'USDT', value: snapshot.usdt.value },
+    { raw: snapshot.usdc.raw, symbol: 'USDC', value: snapshot.usdc.value },
+  ]
+}
+
+function hasIncomingTokenRecord(transactions: Transaction[], islandId: string, symbol: string) {
+  return transactions.some(
+    (transaction) =>
+      transaction.direction === 'in' &&
+      transaction.islandId === islandId &&
+      new RegExp(`\\b${symbol}\\b`).test(transaction.amount) &&
+      (transaction.title.includes('链上') || transaction.counterparty.includes('BNB Chain')),
+  )
+}
+
+function incomingTransactionsFromBnbSnapshot({
+  island,
+  snapshot,
+  transactions,
+}: {
+  island: Island
+  snapshot: Awaited<ReturnType<typeof getBnbAccountSnapshot>>
+  transactions: Transaction[]
+}) {
+  const nextBalances = bnbSnapshotTokenBalances(snapshot)
+  const currentTime = currentTimeLabel()
+
+  return nextBalances.flatMap((nextBalance) => {
+    const previousBalance = island.tokenBalances?.find(
+      (balance) => balance.symbol === nextBalance.symbol,
+    )
+    const previousAmount = tokenBalanceAmount(previousBalance?.value)
+    const nextAmount = tokenBalanceAmount(nextBalance.value)
+    const delta = nextAmount - previousAmount
+
+    if (delta > 0.00000001) {
+      return [
+        {
+          amount: `+${formatTokenAmount(delta, nextBalance.symbol)} ${nextBalance.symbol}`,
+          counterparty: 'BNB Chain 外部入账',
+          direction: 'in' as const,
+          id: `tx-in-${island.id}-${nextBalance.symbol}-${Date.now()}`,
+          islandId: island.id,
+          status: 'completed' as const,
+          time: currentTime,
+          title: `${island.name}链上入账`,
+        },
+      ]
+    }
+
+    if (
+      nextAmount > 0 &&
+      !hasIncomingTokenRecord(transactions, island.id, nextBalance.symbol)
+    ) {
+      return [
+        {
+          amount: `+${formatTokenAmount(nextAmount, nextBalance.symbol)} ${nextBalance.symbol}`,
+          counterparty: 'BNB Chain 余额同步',
+          direction: 'in' as const,
+          id: `tx-sync-${island.id}-${nextBalance.symbol}-${Date.now()}`,
+          islandId: island.id,
+          status: 'completed' as const,
+          time: currentTime,
+          title: `${island.name}链上余额同步`,
+        },
+      ]
+    }
+
+    return []
+  })
+}
+
 function nextRefreshDelay() {
   return 2000 + Math.floor(Math.random() * 3000)
 }
@@ -988,10 +1135,11 @@ function islandLevelForUsd(totalUsd: number): Exclude<IslandLevel, 'reef'> {
 }
 
 const islandWidthByLevel: Record<Exclude<IslandLevel, 'reef'>, number> = {
-  camp: 20,
-  citadel: 36,
-  village: 28,
+  camp: 16,
+  citadel: 25.2,
+  village: 19.6,
 }
+const weatherIconBaseSize = islandWidthByLevel.camp * islandVisualScale * 0.8
 
 function evolveIslandByUsd(island: Island) {
   const level = islandLevelForUsd(islandUsdValue(island))
@@ -1007,61 +1155,120 @@ function evolveIslandsByUsd(islands: Island[]) {
   return islands.map(evolveIslandByUsd)
 }
 
-function islandRect(island: Island) {
-  const width = (island.width / 100) * islandLayoutBounds.width
-  const height = width * 0.92 + 54
+function islandRenderWidth(island: Island) {
+  return island.width * islandVisualScale
+}
+
+function islandRenderHeight(island: Island) {
+  return islandRenderWidth(island) * worldMapAspectRatio * 1.02
+}
+
+function islandOceanGap(gapX = 0.9) {
+  return {
+    x: gapX,
+    y: gapX * worldMapAspectRatio,
+  }
+}
+
+function islandLayoutBox(island: Island) {
+  return {
+    bottom: island.y + islandRenderHeight(island),
+    left: island.x,
+    right: island.x + islandRenderWidth(island),
+    top: island.y,
+  }
+}
+
+function hasOceanGap(candidate: Island, placed: Island[], gapX?: number) {
+  const candidateBox = islandLayoutBox(candidate)
+  const gap = islandOceanGap(gapX)
+
+  return placed.every((island) => {
+    const box = islandLayoutBox(island)
+
+    return (
+      candidateBox.right + gap.x <= box.left ||
+      candidateBox.left >= box.right + gap.x ||
+      candidateBox.bottom + gap.y <= box.top ||
+      candidateBox.top >= box.bottom + gap.y
+    )
+  })
+}
+
+function islandGapScore(candidate: Island, placed: Island[]) {
+  if (placed.length === 0) {
+    return Infinity
+  }
+
+  const candidateBox = islandLayoutBox(candidate)
+
+  return Math.min(
+    ...placed.map((island) => {
+      const box = islandLayoutBox(island)
+      const horizontalGap = Math.max(
+        box.left - candidateBox.right,
+        candidateBox.left - box.right,
+        0,
+      )
+      const verticalGap = Math.max(box.top - candidateBox.bottom, candidateBox.top - box.bottom, 0)
+
+      if (horizontalGap > 0 || verticalGap > 0) {
+        return Math.hypot(horizontalGap, verticalGap)
+      }
+
+      const overlapX =
+        Math.min(candidateBox.right, box.right) - Math.max(candidateBox.left, box.left)
+      const overlapY =
+        Math.min(candidateBox.bottom, box.bottom) - Math.max(candidateBox.top, box.top)
+
+      return -Math.min(overlapX, overlapY)
+    }),
+  )
+}
+
+function islandAverageGapScore(candidate: Island, placed: Island[]) {
+  if (placed.length === 0) {
+    return 0
+  }
+
+  const candidateBox = islandLayoutBox(candidate)
+  const gaps = placed.map((island) => {
+    const box = islandLayoutBox(island)
+    const horizontalGap = Math.max(
+      box.left - candidateBox.right,
+      candidateBox.left - box.right,
+      0,
+    )
+    const verticalGap = Math.max(box.top - candidateBox.bottom, candidateBox.top - box.bottom, 0)
+
+    return Math.hypot(horizontalGap, verticalGap)
+  })
+
+  return gaps.reduce((sum, gap) => sum + gap, 0) / gaps.length
+}
+
+function islandNaturalDistanceScore(candidate: Island, placed: Island[], targetGap: number) {
+  if (placed.length === 0) {
+    return 0
+  }
+
+  const nearestGap = islandGapScore(candidate, placed)
+  const compactnessPenalty = islandAverageGapScore(candidate, placed) * 1.1
+  return nearestGap < 0 ? nearestGap * 10 : -Math.abs(nearestGap - targetGap) - compactnessPenalty
+}
+
+function islandSpawnAreaForBand(band: number, renderWidth: number, renderHeight: number) {
+  const left = Math.max(4, primaryIslandSpawnArea.left - band * islandSpawnExpansionStep)
+  const right = Math.min(96, primaryIslandSpawnArea.right + band * islandSpawnExpansionStep)
+  const top = Math.max(12, primaryIslandSpawnArea.top - band * 5)
+  const bottom = Math.min(90, primaryIslandSpawnArea.bottom + band * 2)
 
   return {
-    bottom: (island.y / 100) * islandLayoutBounds.height + height,
-    left: (island.x / 100) * islandLayoutBounds.width,
-    right: (island.x / 100) * islandLayoutBounds.width + width,
-    top: (island.y / 100) * islandLayoutBounds.height,
+    maxX: Math.max(left, right - renderWidth),
+    maxY: Math.max(top, bottom - renderHeight),
+    minX: left,
+    minY: top,
   }
-}
-
-function mapWorldScale(count: number) {
-  if (count <= 1) {
-    return 1.04
-  }
-
-  if (count <= 3) {
-    return 1.14 + (count - 1) * 0.1
-  }
-
-  return Math.min(2.9, 1.34 + (count - 3) * 0.16)
-}
-
-function mapCameraScale(count: number) {
-  if (count <= 1) {
-    return 1.2
-  }
-
-  if (count <= 3) {
-    return 1.13 - (count - 1) * 0.055
-  }
-
-  return Math.max(0.62, 1.02 - (count - 3) * 0.045)
-}
-
-function islandRenderWidth(island: Island, worldScale: number, cameraScale: number) {
-  return (island.width * islandVisualScale) / worldScale / cameraScale
-}
-
-function islandCircle(island: Island, worldScale: number, cameraScale: number) {
-  const width = (islandRenderWidth(island, worldScale, cameraScale) / 100) *
-    islandLayoutBounds.width *
-    worldScale
-  const visualHeight = width * 0.92
-
-  return {
-    radius: Math.max(width, visualHeight) / 2,
-    x: (island.x / 100) * islandLayoutBounds.width + width / 2,
-    y: (island.y / 100) * islandLayoutBounds.height + visualHeight / 2,
-  }
-}
-
-function circleDistance(a: ReturnType<typeof islandCircle>, b: ReturnType<typeof islandCircle>) {
-  return Math.hypot(a.x - b.x, a.y - b.y)
 }
 
 function seededLayoutRandom(seed: number) {
@@ -1077,75 +1284,108 @@ function seededLayoutRandom(seed: number) {
 
 function islandSeed(island: Island, index: number) {
   const source = `${island.id}:${island.name}:${index}`
-  return Array.from(source).reduce((hash, char) => (hash * 31 + char.charCodeAt(0)) >>> 0, 2166136261)
+  return Array.from(source).reduce(
+    (hash, char) => (hash * 31 + char.charCodeAt(0)) >>> 0,
+    2166136261,
+  )
 }
 
-function hasMinimumIslandGap(
-  candidate: Island,
-  placed: Island[],
-  worldScale: number,
-  cameraScale: number,
-) {
-  const candidateCircle = islandCircle(candidate, worldScale, cameraScale)
-  return placed.every((island) => {
-    const circle = islandCircle(island, worldScale, cameraScale)
-    const requiredGap =
-      candidateCircle.radius + circle.radius + islandLayoutBounds.minGap / cameraScale
-    return circleDistance(candidateCircle, circle) >= requiredGap
-  })
-}
+function layoutIslandsWithGap(islands: Island[], reservedIslands: Island[] = []) {
+  const placed: Island[] = [...reservedIslands]
+  const laidOutByIndex: Island[] = []
+  const orderedIslands = islands
+    .map((island, index) => ({ index, island }))
+    .sort((a, b) => islandRenderWidth(b.island) - islandRenderWidth(a.island) || a.index - b.index)
+  const maxBand = 5
 
-function layoutIslandsWithGap(islands: Island[], worldScale: number, cameraScale: number) {
-  const placed: Island[] = []
-
-  for (const [index, island] of islands.entries()) {
+  for (const { index, island } of orderedIslands) {
     const random = seededLayoutRandom(islandSeed(island, index))
-    const renderWidth = islandRenderWidth(island, worldScale, cameraScale)
+    const renderWidth = islandRenderWidth(island)
+    const renderHeight = islandRenderHeight(island)
+    const minGap = 0.65 + random() * 0.55
+    const targetGap = minGap + 0.35 + Math.pow(random(), 1.6) * 2.4
     let nextIsland = island
-    let bestIsland = nextIsland
-    let bestGap = -Infinity
+    let bestIsland = island
+    let bestScore = -Infinity
+    let bestValidIsland: Island | null = null
+    let bestValidScore = -Infinity
+    let placedInBand = false
 
-    for (let attempt = 0; attempt < 180; attempt += 1) {
-      const candidate = {
-        ...nextIsland,
-        x: random() * Math.max(1, 96 - renderWidth),
-        y: 4 + random() * 62,
-      }
+    for (let band = 0; band <= maxBand; band += 1) {
+      const { maxX, maxY, minX, minY } = islandSpawnAreaForBand(band, renderWidth, renderHeight)
 
-      if (hasMinimumIslandGap(candidate, placed, worldScale, cameraScale)) {
-        nextIsland = candidate
-        break
-      }
+      for (let attempt = 0; attempt < 360; attempt += 1) {
+        const candidate = {
+          ...island,
+          x: minX + random() * (maxX - minX),
+          y: minY + random() * (maxY - minY),
+        }
 
-      const candidateCircle = islandCircle(candidate, worldScale, cameraScale)
-      const nearestGap =
-        placed.length === 0
-          ? Infinity
-          : Math.min(
-              ...placed.map((placedIsland) => {
-                const placedCircle = islandCircle(placedIsland, worldScale, cameraScale)
-                return (
-                  circleDistance(candidateCircle, placedCircle) -
-                  candidateCircle.radius -
-                  placedCircle.radius
-                )
-              }),
-            )
+        if (hasOceanGap(candidate, placed, minGap)) {
+          const score =
+            islandNaturalDistanceScore(candidate, placed, targetGap) + random() * 0.25 - band * 0.55
+          if (score > bestValidScore) {
+            bestValidScore = score
+            bestValidIsland = candidate
+          }
+          continue
+        }
 
-      if (nearestGap > bestGap) {
-        bestGap = nearestGap
-        bestIsland = candidate
-      }
-
-      if (attempt === 179) {
-        nextIsland = bestIsland
+        const score = islandGapScore(candidate, placed)
+        if (score > bestScore) {
+          bestScore = score
+          bestIsland = candidate
+        }
       }
     }
 
+    if (bestValidIsland) {
+      nextIsland = bestValidIsland
+      placedInBand = true
+    }
+
+    if (!placedInBand) {
+      nextIsland = bestIsland
+    }
+
     placed.push(nextIsland)
+    laidOutByIndex[index] = nextIsland
   }
 
-  return placed
+  return laidOutByIndex.filter((island): island is Island => Boolean(island))
+}
+
+function placeIslandWithGap(island: Island, reservedIslands: Island[]) {
+  return layoutIslandsWithGap([island], reservedIslands)[0] ?? island
+}
+
+function sailboatMotionBounds(islands: Island[]) {
+  if (islands.length === 0) {
+    return {
+      maxX: 64,
+      maxY: 42,
+      minX: 44,
+      minY: 18,
+    }
+  }
+
+  const boxes = islands.map(islandLayoutBox)
+  const left = Math.min(...boxes.map((box) => box.left))
+  const right = Math.max(...boxes.map((box) => box.right))
+  const top = Math.min(...boxes.map((box) => box.top))
+  const bottom = Math.max(...boxes.map((box) => box.bottom))
+  const firstIsland = islands[0]
+  const marginX = Math.max(10, firstIsland ? islandRenderWidth(firstIsland) * 0.75 : 10)
+  const marginY = marginX * worldMapAspectRatio
+  const minX = Math.max(4, left - marginX)
+  const minY = Math.max(12, top - marginY)
+
+  return {
+    maxX: Math.max(minX, Math.min(90, right + marginX)),
+    maxY: Math.max(minY, Math.min(78, bottom + marginY)),
+    minX,
+    minY,
+  }
 }
 
 function makeNewIsland(index: number, name: string, saferPro?: SaferProWallet): Island {
@@ -1168,7 +1408,7 @@ function makeNewIsland(index: number, name: string, saferPro?: SaferProWallet): 
     ],
     x: Math.min(78, placement.x + drift * 4),
     y: Math.min(72, placement.y + drift * 5),
-    width: placement.width,
+    width: islandWidthByLevel[level],
     sprite: islandSpriteFor(level),
     saferPro,
     walletIndex: index,
@@ -1225,12 +1465,13 @@ function WalletDashboard() {
   usePreloadCoinIslandImages()
 
   const persistedState = useRef<PersistedWalletState | null | undefined>(undefined)
+  const resetWalletOnLoad = shouldResetWalletStorage()
   if (persistedState.current === undefined) {
     persistedState.current = loadPersistedWalletState()
   }
   const [activeView, setActiveView] = useState<ViewId>('islands')
-  const [walletIslands, setWalletIslands] = useState<Island[]>(
-    () => evolveIslandsByUsd(persistedState.current?.islands ?? initialIslands),
+  const [walletIslands, setWalletIslands] = useState<Island[]>(() =>
+    evolveIslandsByUsd(persistedState.current?.islands ?? initialIslands),
   )
   const [walletTransactions, setWalletTransactions] = useState<Transaction[]>(
     () => persistedState.current?.transactions ?? initialTransactions,
@@ -1244,10 +1485,14 @@ function WalletDashboard() {
     () => persistedState.current?.islands[0]?.id ?? initialIslands[0]?.id ?? '',
   )
   const [selectedReceiveChain, setSelectedReceiveChain] = useState(defaultChain)
-  const [selectedReceiveToken, setSelectedReceiveToken] = useState(receiveTokensFor(defaultChain)[0] ?? defaultToken)
+  const [selectedReceiveToken, setSelectedReceiveToken] = useState(
+    receiveTokensFor(defaultChain)[0] ?? defaultToken,
+  )
   const [receiveAddress, setReceiveAddress] = useState('')
   const [receiveError, setReceiveError] = useState('')
-  const [selectedIslandDetail, setSelectedIslandDetail] = useState<IslandDetailSelection | null>(null)
+  const [selectedIslandDetail, setSelectedIslandDetail] = useState<IslandDetailSelection | null>(
+    null,
+  )
   const [signingState, setSigningState] = useState<SigningState>({ status: 'idle' })
   const [showGameplayIntro, setShowGameplayIntro] = useState(() => !hasDismissedGameplayIntro())
   const [sendForm, setSendForm] = useState<SendFormState>({
@@ -1268,6 +1513,15 @@ function WalletDashboard() {
     () => applyEquippedSkins(walletIslands, equippedSkins),
     [walletIslands, equippedSkins],
   )
+
+  useEffect(() => {
+    if (!resetWalletOnLoad || typeof window === 'undefined') {
+      return
+    }
+
+    const nextUrl = `${window.location.pathname}${window.location.hash}`
+    window.history.replaceState(null, '', nextUrl)
+  }, [resetWalletOnLoad])
 
   useEffect(() => {
     walletIslandsRef.current = walletIslands
@@ -1347,6 +1601,20 @@ function WalletDashboard() {
           .filter((item): item is NonNullable<typeof item> => Boolean(item))
           .map((item) => [item.id, item]),
       )
+      const incomingTransactions = snapshot.flatMap((island) => {
+        const bnb = bnbByIsland.get(island.id)
+        return bnb
+          ? incomingTransactionsFromBnbSnapshot({
+              island,
+              snapshot: bnb.snapshot,
+              transactions: walletTransactionsRef.current,
+            })
+          : []
+      })
+
+      if (incomingTransactions.length > 0) {
+        setWalletTransactions((current) => [...incomingTransactions, ...current])
+      }
 
       setWalletIslands((current) =>
         current.map((island, index) => {
@@ -1360,11 +1628,7 @@ function WalletDashboard() {
             ...(bnb
               ? {
                   status: `BNB ${bnb.snapshot.bnb.value} · USDT ${bnb.snapshot.usdt.value} · USDC ${bnb.snapshot.usdc.value}`,
-                  tokenBalances: [
-                    { symbol: 'BNB', value: bnb.snapshot.bnb.value },
-                    { symbol: 'USDT', value: bnb.snapshot.usdt.value },
-                    { symbol: 'USDC', value: bnb.snapshot.usdc.value },
-                  ],
+                  tokenBalances: bnbSnapshotTokenBalances(bnb.snapshot),
                 }
               : {}),
           }
@@ -1554,7 +1818,10 @@ function WalletDashboard() {
       return
     }
 
-    const island = makeNewIsland(walletIslands.length, walletDraft.name, walletDraft.saferPro)
+    const island = placeIslandWithGap(
+      makeNewIsland(walletIslands.length, walletDraft.name, walletDraft.saferPro),
+      walletIslands,
+    )
     setWalletIslands((current) => [...current, island])
     setWalletTransactions((current) => [
       {
@@ -1576,7 +1843,10 @@ function WalletDashboard() {
     setActiveModal(null)
   }
 
-  const updateReceiveAddress = async (islandId = selectedReceiveIslandId, chain = selectedReceiveChain) => {
+  const updateReceiveAddress = async (
+    islandId = selectedReceiveIslandId,
+    chain = selectedReceiveChain,
+  ) => {
     const island = walletIslands.find((item) => item.id === islandId)
     setReceiveError('')
 
@@ -1669,13 +1939,19 @@ function WalletDashboard() {
       const bnbAccount = source.saferPro.accounts['BNB Chain']
       const bnbParams =
         sendForm.chain === 'BNB Chain' && bnbAccount
-          ? await getBnbTxParams(bnbAccount.address, sendForm.token, sendForm.toAddress, sendForm.amount)
+          ? await getBnbTxParams(
+              bnbAccount.address,
+              sendForm.token,
+              sendForm.toAddress,
+              sendForm.amount,
+            )
           : null
       const signed = await signSaferProTransfer({
         amount: sendForm.amount,
         chain: sendForm.chain,
         data: bnbParams?.data,
-        derivationPath: bnbParams && bnbAccount ? bnbAccount.derivationPath : source.saferPro.derivationPath,
+        derivationPath:
+          bnbParams && bnbAccount ? bnbAccount.derivationPath : source.saferPro.derivationPath,
         gasLimit: bnbParams?.gasLimit,
         gasPrice: bnbParams?.gasPrice,
         keystoreJson: source.saferPro.keystoreJson,
@@ -1712,7 +1988,11 @@ function WalletDashboard() {
           counterparty: broadcastHash ?? signed.txHash,
           amount: `-${sendForm.amount} ${sendForm.token}`,
           direction: 'out',
-          status: broadcastError ? 'pending' : sendForm.toAddress.startsWith('im') ? 'completed' : 'risk',
+          status: broadcastError
+            ? 'pending'
+            : sendForm.toAddress.startsWith('im')
+              ? 'completed'
+              : 'risk',
         },
         ...current,
       ])
@@ -1801,7 +2081,6 @@ function WalletDashboard() {
           {showGameplayIntro ? <GameplayIntroBanner onClose={dismissGameplayIntro} /> : null}
         </div>
       </div>
-
     </section>
   )
 }
@@ -1850,7 +2129,8 @@ function GameplayIntroBanner({ onClose }: { onClose: () => void }) {
         <div className="min-w-0 flex-1 pr-1">
           <div className="text-title-sm font-black">My Island 核心玩法</div>
           <p className="mt-2 text-body-sm font-bold leading-6 text-[#dcf6ff]">
-            创建钱包生成岛屿；账户总价值以 U 计算，并推动岛屿成长为小型、中型、大型。转账和收款会形成本地航线记录。每日任务产出岛币，岛币只用于购买和使用节日岛屿皮肤。
+            创建钱包生成岛屿；账户总价值以 U
+            计算，并推动岛屿成长为小型、中型、大型。转账和收款会形成本地航线记录。每日任务产出岛币，岛币只用于购买和使用节日岛屿皮肤。
           </p>
           <div className="mt-3 grid grid-cols-[1fr_auto_1fr_auto_1fr] items-center gap-1.5 rounded-xl border border-[#b8e7ff]/45 bg-white/14 p-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.22)]">
             {evolutionSteps.map((step, index) => (
@@ -1867,9 +2147,7 @@ function GameplayIntroBanner({ onClose }: { onClose: () => void }) {
                   </div>
                 </div>
                 {index < evolutionSteps.length - 1 ? (
-                  <div className="text-body-lg font-black text-[#ffe9a8]">
-                    →
-                  </div>
+                  <div className="text-body-lg font-black text-[#ffe9a8]">→</div>
                 ) : null}
               </Fragment>
             ))}
@@ -1910,18 +2188,9 @@ function HudCard({ stat }: { stat: HudStat }) {
   )
 }
 
-function OceanPage({
-  children,
-  className = '',
-}: {
-  children: ReactNode
-  className?: string
-}) {
+function OceanPage({ children, className = '' }: { children: ReactNode; className?: string }) {
   return (
-    <div
-      className="coin-ocean-page h-full"
-      style={{ backgroundImage: `url(${oceanPageBg})` }}
-    >
+    <div className="coin-ocean-page h-full" style={{ backgroundImage: `url(${oceanPageBg})` }}>
       <div className="coin-ocean-page-shade" />
       <div className={`relative z-10 h-full min-h-0 ${className}`}>{children}</div>
     </div>
@@ -1948,7 +2217,10 @@ function AssetsView({
           description="每个账户对应一座岛礁，创建钱包会生成助记词并新增一座 Lv.1 营地岛。"
         />
         <div className="grid shrink-0 gap-2">
-          <Button className="h-11 rounded-xl px-4 text-body-md font-black shadow-[0_8px_18px_rgba(10,84,180,0.26)]" onClick={onCreateWallet}>
+          <Button
+            className="h-11 rounded-xl px-4 text-body-md font-black shadow-[0_8px_18px_rgba(10,84,180,0.26)]"
+            onClick={onCreateWallet}
+          >
             创建钱包
           </Button>
           <Button
@@ -1970,38 +2242,38 @@ function AssetsView({
           const totalUsd = formatUsdValue(islandUsdValue(island))
 
           return (
-          <button
-            aria-label={`${island.name}账户，总资产 ${totalUsd}`}
-            className="flex min-h-[120px] w-full items-center gap-3 rounded-2xl border border-white/50 bg-white/24 p-3 text-left shadow-[0_10px_28px_rgba(93,62,28,0.14),inset_0_1px_0_rgba(255,255,255,0.44)] backdrop-blur-md transition-transform duration-300 hover:-translate-y-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            key={island.id}
-            onClick={(event) => {
-              const originElement =
-                event.currentTarget.querySelector<HTMLElement>('[data-island-origin]') ??
-                event.currentTarget
-              onSelectIsland(selectionFromElement(island, originElement))
-            }}
-            type="button"
-          >
-            <div className="flex w-28 shrink-0 justify-center" data-island-origin>
-              <img src={island.sprite} alt="" className="max-h-24 object-contain" />
-            </div>
-            <div className="min-w-0 flex-1">
-              <div className="flex flex-wrap items-center gap-2">
-                <h2 className="text-title-sm font-bold text-foreground">{island.name}</h2>
-                <Badge variant={island.level === 'citadel' ? 'success' : 'neutral'}>
-                  {levelLabels[island.level]}
-                </Badge>
+            <button
+              aria-label={`${island.name}账户，总资产 ${totalUsd}`}
+              className="flex min-h-[120px] w-full items-center gap-3 rounded-2xl border border-white/50 bg-white/24 p-3 text-left shadow-[0_10px_28px_rgba(93,62,28,0.14),inset_0_1px_0_rgba(255,255,255,0.44)] backdrop-blur-md transition-transform duration-300 hover:-translate-y-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              key={island.id}
+              onClick={(event) => {
+                const originElement =
+                  event.currentTarget.querySelector<HTMLElement>('[data-island-origin]') ??
+                  event.currentTarget
+                onSelectIsland(selectionFromElement(island, originElement))
+              }}
+              type="button"
+            >
+              <div className="flex w-28 shrink-0 justify-center" data-island-origin>
+                <img src={island.sprite} alt="" className="max-h-24 object-contain" />
               </div>
-              <div className="mt-2 text-title-md font-bold text-primary">{totalUsd}</div>
-              <div className="mt-1 text-caption font-semibold text-muted-foreground">
-                账户总余额折合
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <h2 className="text-title-sm font-bold text-foreground">{island.name}</h2>
+                  <Badge variant={island.level === 'citadel' ? 'success' : 'neutral'}>
+                    {levelLabels[island.level]}
+                  </Badge>
+                </div>
+                <div className="mt-2 text-title-md font-bold text-primary">{totalUsd}</div>
+                <div className="mt-1 text-caption font-semibold text-muted-foreground">
+                  账户总余额折合
+                </div>
+                <p className="mt-2 text-body-sm text-muted-foreground">{island.status}</p>
+                <div className="mt-2 truncate rounded-xl border border-white/45 bg-white/18 px-3 py-2 text-caption font-semibold text-[#d7f6ff] shadow-[inset_0_1px_0_rgba(255,255,255,0.48)] backdrop-blur-md">
+                  {island.address}
+                </div>
               </div>
-              <p className="mt-2 text-body-sm text-muted-foreground">{island.status}</p>
-              <div className="mt-2 truncate rounded-xl border border-white/45 bg-white/18 px-3 py-2 text-caption font-semibold text-[#d7f6ff] shadow-[inset_0_1px_0_rgba(255,255,255,0.48)] backdrop-blur-md">
-                {island.address}
-              </div>
-            </div>
-          </button>
+            </button>
           )
         })}
       </div>
@@ -2009,13 +2281,7 @@ function AssetsView({
   )
 }
 
-function RoutesView({
-  islands,
-  transactions,
-}: {
-  islands: Island[]
-  transactions: Transaction[]
-}) {
+function RoutesView({ islands, transactions }: { islands: Island[]; transactions: Transaction[] }) {
   const grouped = islands
     .map((island) => ({
       island,
@@ -2051,7 +2317,10 @@ function RoutesView({
         </div>
         <div className="mt-3 space-y-3">
           {grouped.map((group) => (
-            <div className="rounded-2xl border border-white/50 bg-white/24 p-3 shadow-[0_10px_28px_rgba(93,62,28,0.14)] backdrop-blur-md" key={group.island.id}>
+            <div
+              className="rounded-2xl border border-white/50 bg-white/24 p-3 shadow-[0_10px_28px_rgba(93,62,28,0.14)] backdrop-blur-md"
+              key={group.island.id}
+            >
               <div className="flex items-center gap-3">
                 <img src={group.island.sprite} alt="" className="h-14 w-16 object-contain" />
                 <div>
@@ -2063,7 +2332,11 @@ function RoutesView({
               </div>
               <div className="mt-3 space-y-2">
                 {group.items.map((transaction) => (
-                  <TransactionRow islands={islands} key={transaction.id} transaction={transaction} />
+                  <TransactionRow
+                    islands={islands}
+                    key={transaction.id}
+                    transaction={transaction}
+                  />
                 ))}
               </div>
             </div>
@@ -2085,20 +2358,24 @@ function IslandMapView({
   onOpenSend: () => void
   onSelectIsland: (selection: IslandDetailSelection) => void
 }) {
-  const worldScale = mapWorldScale(islands.length)
-  const cameraScale = mapCameraScale(islands.length) / Math.sqrt(worldScale)
-  const laidOutIslands = useMemo(
-    () => layoutIslandsWithGap(islands, worldScale, cameraScale),
-    [cameraScale, islands, worldScale],
-  )
-  const sailboatRef = useSailboatMotion(laidOutIslands)
+  const worldScale = worldMapHeightScale
+  const cameraScale = 1
+  const laidOutIslands = islands
+  const mapIslands = laidOutIslands
+  const sailboatRef = useSailboatMotion(mapIslands)
   const weather = useWeatherCycle()
   const [zoomDelta, setZoomDelta] = useState(0)
   const mapScale = cameraScale + zoomDelta
   const [mapOffset, setMapOffset] = useState({ x: 0, y: 0 })
   const mapViewportRef = useRef<HTMLDivElement | null>(null)
-  const dragRef = useRef<{ pointerId: number; startX: number; startY: number; x: number; y: number } | null>(null)
-  const canMoveMap = laidOutIslands.length > 4 || worldScale > 1
+  const dragRef = useRef<{
+    pointerId: number
+    startX: number
+    startY: number
+    x: number
+    y: number
+  } | null>(null)
+  const canMoveMap = mapIslands.length > 4 || worldScale > 1
 
   const clampOffset = (offset: { x: number; y: number }, scale = mapScale) => {
     const viewport = mapViewportRef.current
@@ -2106,8 +2383,8 @@ function IslandMapView({
       return worldScale <= 1 && scale >= 1 ? { x: 0, y: 0 } : offset
     }
 
-    const mapWidth = viewport.clientWidth * worldScale * scale
     const mapHeight = viewport.clientHeight * worldScale * scale
+    const mapWidth = mapHeight * worldMapAspectRatio
     const maxX = Math.max(0, (mapWidth - viewport.clientWidth) / 2)
     const maxY = Math.max(0, (mapHeight - viewport.clientHeight) / 2)
 
@@ -2123,9 +2400,18 @@ function IslandMapView({
     setMapOffset((current) => clampOffset(current, scale))
   }
 
+  const defaultMapOffset = (scale = mapScale) => {
+    const viewport = mapViewportRef.current
+    if (!viewport) {
+      return { x: 0, y: 0 }
+    }
+
+    return clampOffset({ x: viewport.clientWidth * defaultMapOffsetXRatio, y: 0 }, scale)
+  }
+
   useEffect(() => {
     setZoomDelta(0)
-    setMapOffset((current) => clampOffset(current, cameraScale))
+    setMapOffset(defaultMapOffset(cameraScale))
   }, [cameraScale, worldScale])
 
   useEffect(() => {
@@ -2152,7 +2438,9 @@ function IslandMapView({
       }}
     >
       <div
-        className={canMoveMap ? 'absolute inset-0 cursor-grab active:cursor-grabbing' : 'absolute inset-0'}
+        className={
+          canMoveMap ? 'absolute inset-0 cursor-grab active:cursor-grabbing' : 'absolute inset-0'
+        }
         onDragStart={(event) => event.preventDefault()}
         onPointerDown={(event) => {
           if (!canMoveMap) {
@@ -2189,12 +2477,12 @@ function IslandMapView({
           }
         }}
         style={{
-          transform: `translate3d(${mapOffset.x}px, ${mapOffset.y}px, 0) scale(${mapScale})`,
-          transformOrigin: '50% 50%',
+          aspectRatio: worldMapAspectRatio,
           height: `${worldScale * 100}%`,
-          left: `${(1 - worldScale) * 50}%`,
-          top: `${(1 - worldScale) * 50}%`,
-          width: `${worldScale * 100}%`,
+          left: `calc(50% + ${mapOffset.x}px)`,
+          top: `calc(50% + ${mapOffset.y}px)`,
+          transform: `translate(-50%, -50%) scale(${mapScale})`,
+          transformOrigin: '50% 50%',
         }}
       >
         <img
@@ -2205,123 +2493,121 @@ function IslandMapView({
           draggable={false}
           loading="eager"
         />
-      <div className="absolute inset-0 bg-gradient-to-b from-dark-surface/10 via-transparent to-dark-surface/30" />
-      <div className="absolute inset-x-0 top-0 h-28 bg-gradient-to-b from-background/60 to-transparent" />
-      <div className="absolute inset-x-0 bottom-0 h-36 bg-gradient-to-t from-background/70 to-transparent" />
-      <div className="absolute -left-16 top-16 h-32 w-52 rounded-full bg-background/55 blur-xl" />
-      <div className="absolute -right-20 top-12 h-36 w-60 rounded-full bg-background/55 blur-xl" />
-      <div className="absolute bottom-24 left-6 h-28 w-44 rounded-full bg-background/45 blur-xl" />
-      <svg
-        className="pointer-events-none absolute inset-0 z-20 h-full w-full"
-        viewBox="0 0 864 1393"
-        preserveAspectRatio="none"
-        aria-hidden="true"
-      >
+        <div className="absolute inset-0 bg-gradient-to-b from-dark-surface/10 via-transparent to-dark-surface/30" />
+        <div className="absolute inset-x-0 top-0 h-28 bg-gradient-to-b from-background/60 to-transparent" />
+        <div className="absolute inset-x-0 bottom-0 h-36 bg-gradient-to-t from-background/70 to-transparent" />
+        <div className="absolute -left-16 top-16 h-32 w-52 rounded-full bg-background/55 blur-xl" />
+        <div className="absolute -right-20 top-12 h-36 w-60 rounded-full bg-background/55 blur-xl" />
+        <div className="absolute bottom-24 left-6 h-28 w-44 rounded-full bg-background/45 blur-xl" />
+        <svg
+          className="pointer-events-none absolute inset-0 z-20 h-full w-full"
+          viewBox="0 0 864 1393"
+          preserveAspectRatio="none"
+          aria-hidden="true"
+        >
+          {routes.map((route) => (
+            <path
+              d={route.path}
+              fill="none"
+              key={route.id}
+              stroke={route.tone === 'external' ? 'var(--warning)' : 'var(--primary-foreground)'}
+              strokeDasharray={route.tone === 'external' ? '10 14' : '12 12'}
+              strokeLinecap="round"
+              strokeWidth="6"
+            />
+          ))}
+        </svg>
+
         {routes.map((route) => (
-          <path
-            d={route.path}
-            fill="none"
+          <img
+            alt={route.label}
+            className="absolute z-30 object-contain drop-shadow"
+            decoding="sync"
+            draggable={false}
             key={route.id}
-            stroke={
-              route.tone === 'external' ? 'var(--warning)' : 'var(--primary-foreground)'
-            }
-            strokeDasharray={route.tone === 'external' ? '10 14' : '12 12'}
-            strokeLinecap="round"
-            strokeWidth="6"
+            loading="eager"
+            src={route.boat}
+            style={route.boatStyle}
           />
         ))}
-      </svg>
 
-      {routes.map((route) => (
-        <img
-          alt={route.label}
-          className="absolute z-30 object-contain drop-shadow"
-          decoding="sync"
-          draggable={false}
-          key={route.id}
-          loading="eager"
-          src={route.boat}
-          style={route.boatStyle}
-        />
-      ))}
+        {mapIslands.map((island) => (
+          <button
+            aria-label={island.name}
+            className="group absolute z-40 flex flex-col items-center text-left transition-transform duration-300 hover:-translate-y-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            key={island.id}
+            onClick={(event) => onSelectIsland(selectionFromElement(island, event.currentTarget))}
+            style={{
+              left: `${island.x}%`,
+              top: `${island.y}%`,
+              width: `${islandRenderWidth(island)}%`,
+            }}
+            type="button"
+          >
+            <span className="mb-1.5 max-w-[150%] rounded-lg border border-primary/30 bg-dark-surface/84 px-2.5 py-1.5 text-primary-foreground shadow-[var(--shadow-card)] backdrop-blur-sm transition-transform duration-300 group-hover:scale-105">
+              <span className="block max-w-32 truncate text-caption font-black leading-5 sm:max-w-36 sm:text-body-sm">
+                {island.name}
+              </span>
+            </span>
+            <img
+              src={island.sprite}
+              alt=""
+              className="w-full object-contain drop-shadow-lg"
+              decoding="sync"
+              draggable={false}
+              loading="eager"
+            />
+          </button>
+        ))}
 
-      {laidOutIslands.map((island) => (
+        {laidOutIslands.length === 0 ? (
+          <div className="absolute left-1/2 top-[34%] z-40 w-[76%] -translate-x-1/2 rounded-2xl border border-[#f7d48c]/50 bg-[#2b1608]/78 px-4 py-4 text-center text-[#ffe9a8] shadow-[0_8px_0_rgba(55,28,8,0.45)] backdrop-blur-sm">
+            <div className="text-body-md font-bold">还没有岛屿钱包</div>
+            <div className="mt-2 text-caption leading-5 opacity-90">
+              点击码头或帆船会先创建你的第一座岛屿。
+            </div>
+          </div>
+        ) : null}
         <button
-          aria-label={island.name}
-          className="group absolute z-40 flex flex-col items-center text-left transition-transform duration-300 hover:-translate-y-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          key={island.id}
-          onClick={(event) => onSelectIsland(selectionFromElement(island, event.currentTarget))}
-          style={{
-            left: `${island.x}%`,
-            top: `${island.y}%`,
-            width: `${islandRenderWidth(island, worldScale, cameraScale)}%`,
-          }}
+          aria-label="收款码头"
+          className="coin-dock-action group absolute left-[49%] top-[15%] z-50 w-[9.2%] border-0 bg-transparent p-0 text-primary-foreground drop-shadow-[0_12px_16px_rgba(0,0,0,0.42)] transition-transform hover:-translate-y-1 hover:scale-[1.04] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          onClick={onOpenReceive}
+          onPointerDown={(event) => event.stopPropagation()}
           type="button"
         >
-          <span className="mb-1.5 max-w-[150%] rounded-lg border border-primary/30 bg-dark-surface/84 px-2.5 py-1.5 text-primary-foreground shadow-[var(--shadow-card)] backdrop-blur-sm transition-transform duration-300 group-hover:scale-105">
-            <span className="block max-w-32 truncate text-caption font-black leading-5 sm:max-w-36 sm:text-body-sm">
-              {island.name}
-            </span>
-          </span>
           <img
-            src={island.sprite}
+            src={dockIslandAction}
             alt=""
-            className="w-full object-contain drop-shadow-lg"
+            className="w-full object-contain"
             decoding="sync"
             draggable={false}
             loading="eager"
           />
+          <span className="absolute left-1/2 top-[78%] -translate-x-1/2 whitespace-nowrap rounded-md border-2 border-[#f7d48c]/75 bg-[#2b1608]/88 px-2 py-1 text-caption font-black text-[#ffe9a8] shadow-[0_3px_0_rgba(55,28,8,0.65),0_8px_14px_rgba(0,0,0,0.32)] opacity-100 transition-opacity group-hover:opacity-100">
+            收款码头
+          </span>
         </button>
-      ))}
-
-      {laidOutIslands.length === 0 ? (
-        <div className="absolute left-1/2 top-[34%] z-40 w-[76%] -translate-x-1/2 rounded-2xl border border-[#f7d48c]/50 bg-[#2b1608]/78 px-4 py-4 text-center text-[#ffe9a8] shadow-[0_8px_0_rgba(55,28,8,0.45)] backdrop-blur-sm">
-          <div className="text-body-md font-bold">还没有岛屿钱包</div>
-          <div className="mt-2 text-caption leading-5 opacity-90">
-            点击码头或帆船会先创建你的第一座岛屿。
-          </div>
-        </div>
-      ) : null}
-      <button
-        aria-label="收款码头"
-        className="coin-dock-action group absolute right-[3%] top-[8%] z-50 w-[22%] border-0 bg-transparent p-0 text-primary-foreground drop-shadow-[0_16px_22px_rgba(0,0,0,0.48)] transition-transform hover:-translate-y-1 hover:scale-[1.04] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        onClick={onOpenReceive}
-        onPointerDown={(event) => event.stopPropagation()}
-        type="button"
-      >
-        <img
-          src={dockIslandAction}
-          alt=""
-          className="w-full object-contain"
-          decoding="sync"
-          draggable={false}
-          loading="eager"
-        />
-        <span className="absolute left-1/2 top-[78%] -translate-x-1/2 whitespace-nowrap rounded-lg border-2 border-[#f7d48c]/75 bg-[#2b1608]/88 px-3 py-1.5 text-body-sm font-black text-[#ffe9a8] shadow-[0_4px_0_rgba(55,28,8,0.65),0_10px_18px_rgba(0,0,0,0.35)] opacity-100 transition-opacity group-hover:opacity-100">
-          收款码头
-        </span>
-      </button>
-      <button
-        aria-label="转账船坞"
-        className="coin-sail-action group absolute z-50 w-[15%] border-0 bg-transparent p-0 text-primary-foreground drop-shadow-[0_14px_18px_rgba(0,0,0,0.42)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        onClick={onOpenSend}
-        onPointerDown={(event) => event.stopPropagation()}
-        ref={sailboatRef}
-        type="button"
-      >
-        <img
-          src={sailboatAction}
-          alt=""
-          className="w-full object-contain"
-          decoding="sync"
-          draggable={false}
-          loading="eager"
-        />
-        <span className="absolute left-1/2 top-[77%] -translate-x-1/2 whitespace-nowrap rounded-lg border-2 border-[#f7d48c]/75 bg-[#2b1608]/88 px-3 py-1.5 text-body-sm font-black text-[#ffe9a8] shadow-[0_4px_0_rgba(55,28,8,0.65),0_10px_18px_rgba(0,0,0,0.35)] opacity-100 transition-opacity group-hover:opacity-100">
-          转账船坞
-        </span>
-      </button>
-      <WeatherLayer weather={weather} />
+        <button
+          aria-label="转账船坞"
+          className="coin-sail-action group absolute z-50 w-[6%] border-0 bg-transparent p-0 text-primary-foreground drop-shadow-[0_10px_14px_rgba(0,0,0,0.38)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          onClick={onOpenSend}
+          onPointerDown={(event) => event.stopPropagation()}
+          ref={sailboatRef}
+          type="button"
+        >
+          <img
+            src={sailboatAction}
+            alt=""
+            className="w-full object-contain"
+            decoding="sync"
+            draggable={false}
+            loading="eager"
+          />
+          <span className="absolute left-1/2 top-[77%] -translate-x-1/2 whitespace-nowrap rounded-md border-2 border-[#f7d48c]/75 bg-[#2b1608]/88 px-2 py-1 text-caption font-black text-[#ffe9a8] shadow-[0_3px_0_rgba(55,28,8,0.65),0_8px_14px_rgba(0,0,0,0.32)] opacity-100 transition-opacity group-hover:opacity-100">
+            转账船坞
+          </span>
+        </button>
+        <WeatherLayer weather={weather} />
       </div>
       <img
         src={compass}
@@ -2367,7 +2653,7 @@ function nextWeatherEvent(id: number, kind: WeatherKind): WeatherEvent {
     kind,
     x: 13 + Math.random() * 74,
     y: 12 + Math.random() * 66,
-    size: 18 + Math.random() * 4,
+    size: weatherIconBaseSize * (0.94 + Math.random() * 0.12),
     durationMs: 5200 + Math.floor(Math.random() * 2400),
   }
 }
@@ -2452,8 +2738,8 @@ function useSailboatMotion(islands: Island[]) {
     lastTime: 0,
     vx: 0.15,
     vy: 0.09,
-    x: 34,
-    y: 40,
+    x: 54,
+    y: 30,
   })
   const islandsRef = useRef(islands)
 
@@ -2466,16 +2752,10 @@ function useSailboatMotion(islands: Island[]) {
       return undefined
     }
 
-    const bounds = {
-      maxX: 79,
-      maxY: 73,
-      minX: 4,
-      minY: 15,
-    }
-
     const tick = () => {
       const time = performance.now()
       const current = motionRef.current
+      const bounds = sailboatMotionBounds(islandsRef.current)
       const elapsed = current.lastTime ? Math.min((time - current.lastTime) / 1000, 0.12) : 0
       current.lastTime = time
 
@@ -2497,16 +2777,17 @@ function useSailboatMotion(islands: Island[]) {
         bounced = true
       }
 
-      const boatCenter = { x: nextX + 7.5, y: nextY + 6 }
+      const boatCenter = { x: nextX + 3, y: nextY + 3.4 }
       for (const island of islandsRef.current) {
+        const box = islandLayoutBox(island)
         const islandCenter = {
-          x: island.x + island.width * 0.52,
-          y: island.y + island.width * 0.34,
+          x: (box.left + box.right) / 2,
+          y: (box.top + box.bottom) / 2,
         }
         const dx = boatCenter.x - islandCenter.x
         const dy = boatCenter.y - islandCenter.y
         const distance = Math.hypot(dx, dy)
-        const radius = island.width * 0.38 + 6
+        const radius = Math.max(box.right - box.left, box.bottom - box.top) * 0.55 + 5
 
         if (distance < radius) {
           const safeDistance = distance || 1
@@ -2605,7 +2886,9 @@ function IslandDetailLayer({
       <div className="island-detail-card no-scrollbar absolute z-20 overflow-y-auto px-4 py-2">
         <div className="mb-3 grid gap-1 text-center">
           <div>
-            <div className="text-caption font-black text-[#80501f]">{levelLabels[island.level]}</div>
+            <div className="text-caption font-black text-[#80501f]">
+              {levelLabels[island.level]}
+            </div>
             <h2 className="mt-1 text-title-sm font-black text-[#2f1b0b]">{island.name}</h2>
             <div className="mt-1 text-title-md font-black text-[#1267bd]">{totalUsd}</div>
           </div>
@@ -2642,15 +2925,17 @@ function IslandDetailLayer({
         <div className="mt-3 rounded-lg border border-[#9b6330]/30 bg-[#fff4cf]/35 p-3">
           <div className="text-body-sm font-black">钱包资产</div>
           <div className="mt-2 grid gap-2">
-            {balances.length > 0 ? balances.map((balance) => (
-              <div
-                className="flex items-center justify-between rounded-md border border-[#9b6330]/24 bg-[#fff8df]/48 px-3 py-2"
-                key={balance.symbol}
-              >
-                <span className="text-body-sm font-black">{balance.symbol}</span>
-                <span className="text-body-md font-black">{balance.value}</span>
-              </div>
-            )) : (
+            {balances.length > 0 ? (
+              balances.map((balance) => (
+                <div
+                  className="flex items-center justify-between rounded-md border border-[#9b6330]/24 bg-[#fff8df]/48 px-3 py-2"
+                  key={balance.symbol}
+                >
+                  <span className="text-body-sm font-black">{balance.symbol}</span>
+                  <span className="text-body-md font-black">{balance.value}</span>
+                </div>
+              ))
+            ) : (
               <div className="rounded-md border border-[#9b6330]/24 bg-[#fff8df]/48 px-3 py-2 text-caption font-black">
                 暂无链上资产
               </div>
@@ -2750,195 +3035,206 @@ function WalletModalLayer({
           draggable={false}
         />
         <div className="relative z-10 mx-auto flex h-full w-[62%] flex-col px-1 pb-[10%] pt-[20%]">
-        <div className="mb-4 flex shrink-0 items-start justify-between gap-3">
-          <div>
-            <div className="text-caption font-semibold uppercase tracking-wider text-[#8c5524]">
-              {modalKind === 'create'
-                ? '创建钱包'
-                : modalKind === 'send'
-                  ? '转账船坞'
-                  : '收款码头'}
+          <div className="mb-4 flex shrink-0 items-start justify-between gap-3">
+            <div>
+              <div className="text-caption font-semibold uppercase tracking-wider text-[#8c5524]">
+                {modalKind === 'create'
+                  ? '创建钱包'
+                  : modalKind === 'send'
+                    ? '转账船坞'
+                    : '收款码头'}
+              </div>
+              <h2 className="mt-1 text-title-sm font-bold text-[#3b2615]">
+                {modalKind === 'create'
+                  ? '生成新岛屿钱包'
+                  : modalKind === 'send'
+                    ? '发起一笔航海转账'
+                    : '选择钱包收款'}
+              </h2>
             </div>
-            <h2 className="mt-1 text-title-sm font-bold text-[#3b2615]">
-              {modalKind === 'create'
-                ? '生成新岛屿钱包'
-                : modalKind === 'send'
-                  ? '发起一笔航海转账'
-                  : '选择钱包收款'}
-            </h2>
+            <Button
+              aria-label="关闭弹窗"
+              className="bg-[#7b4a23]/15 text-[#3b2615] hover:bg-[#7b4a23]/25"
+              onClick={onClose}
+              size="icon-sm"
+              variant="ghost"
+            >
+              ×
+            </Button>
           </div>
-          <Button
-            aria-label="关闭弹窗"
-            className="bg-[#7b4a23]/15 text-[#3b2615] hover:bg-[#7b4a23]/25"
-            onClick={onClose}
-            size="icon-sm"
-            variant="ghost"
-          >
-            ×
-          </Button>
-        </div>
 
-        <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto pr-1">
-        {modalKind === 'create' && draft ? (
-          <div className="space-y-4 pb-2">
-            <label className="block">
-              <span className="mb-2 block text-body-sm font-semibold text-[#3b2615]">岛屿名称</span>
-              <Input
-                className="border-[#9b6330]/40 bg-[#fff8df]/75 text-[#3b2615] placeholder:text-[#8c5524]/70"
-                value={draft.name}
-                onChange={(event) => onDraftNameChange(event.target.value)}
-              />
-            </label>
-            <div className="rounded-2xl border border-[#9b6330]/45 bg-[#fff3cf]/45 p-4">
-              <div className="text-body-sm font-bold text-[#3b2615]">SaferPro 本地助记词</div>
-              {draft.status === 'loading' ? (
-                <div className="mt-3 rounded-xl border border-[#9b6330]/35 bg-[#fff8df]/65 px-3 py-4 text-body-sm text-[#6b4a24]">
-                  正在调用 tcx-wasm 生成浏览器本地 keystore...
-                </div>
-              ) : null}
-              {draft.status === 'error' ? (
-                <div className="mt-3 rounded-xl border border-destructive/40 bg-error-surface px-3 py-4 text-body-sm font-semibold text-error-text">
-                  {draft.error}
-                </div>
-              ) : null}
-              {draft.status === 'ready' ? (
-                <div className="mt-3 grid grid-cols-3 gap-2">
-                  {draft.mnemonic.map((word, index) => (
-                    <div
-                    className="rounded-xl border border-[#9b6330]/35 bg-[#fff8df]/65 px-3 py-2 text-caption font-semibold text-[#3b2615]"
-                      key={`${word}-${index}`}
-                    >
-                      {index + 1}. {word}
+          <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto pr-1">
+            {modalKind === 'create' && draft ? (
+              <div className="space-y-4 pb-2">
+                <label className="block">
+                  <span className="mb-2 block text-body-sm font-semibold text-[#3b2615]">
+                    岛屿名称
+                  </span>
+                  <Input
+                    className="border-[#9b6330]/40 bg-[#fff8df]/75 text-[#3b2615] placeholder:text-[#8c5524]/70"
+                    value={draft.name}
+                    onChange={(event) => onDraftNameChange(event.target.value)}
+                  />
+                </label>
+                <div className="rounded-2xl border border-[#9b6330]/45 bg-[#fff3cf]/45 p-4">
+                  <div className="text-body-sm font-bold text-[#3b2615]">SaferPro 本地助记词</div>
+                  {draft.status === 'loading' ? (
+                    <div className="mt-3 rounded-xl border border-[#9b6330]/35 bg-[#fff8df]/65 px-3 py-4 text-body-sm text-[#6b4a24]">
+                      正在调用 tcx-wasm 生成浏览器本地 keystore...
                     </div>
-                  ))}
+                  ) : null}
+                  {draft.status === 'error' ? (
+                    <div className="mt-3 rounded-xl border border-destructive/40 bg-error-surface px-3 py-4 text-body-sm font-semibold text-error-text">
+                      {draft.error}
+                    </div>
+                  ) : null}
+                  {draft.status === 'ready' ? (
+                    <div className="mt-3 grid grid-cols-3 gap-2">
+                      {draft.mnemonic.map((word, index) => (
+                        <div
+                          className="rounded-xl border border-[#9b6330]/35 bg-[#fff8df]/65 px-3 py-2 text-caption font-semibold text-[#3b2615]"
+                          key={`${word}-${index}`}
+                        >
+                          {index + 1}. {word}
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                  <p className="mt-3 text-caption leading-5 text-[#6b4a24]">
+                    仅用于活动作品演示。不要导入真实助记词，也不要把大额资产转入演示钱包。
+                  </p>
                 </div>
-              ) : null}
-              <p className="mt-3 text-caption leading-5 text-[#6b4a24]">
-                仅用于活动作品演示。不要导入真实助记词，也不要把大额资产转入演示钱包。
-              </p>
-            </div>
-            <Button className="w-full" disabled={draft.status !== 'ready'} onClick={onConfirmCreate}>
-              已备份，创建岛屿钱包
-            </Button>
-          </div>
-        ) : null}
-
-        {modalKind === 'send' ? (
-          <div className="space-y-4 pb-2">
-            <div className="rounded-xl border border-[#9b6330]/30 bg-[#fff8df]/56 px-3 py-2 text-caption font-black text-[#6b4a24]">
-              当前余额：{tokenBalanceLabel(
-                islands.find((island) => island.id === sendForm.fromIslandId),
-                sendForm.token,
-              )}
-            </div>
-            <SelectField
-              label="付款岛屿"
-              value={sendForm.fromIslandId}
-              onChange={(value) => onSendFormChange((form) => ({ ...form, fromIslandId: value }))}
-              options={islands.map((island) => ({
-                label: island.name,
-                value: island.id,
-              }))}
-            />
-            <div className="grid gap-3">
-              <SelectField
-                label="链"
-                value={sendForm.chain}
-                onChange={(value) =>
-                  onSendFormChange((form) => ({
-                    ...form,
-                    chain: value,
-                    token: transferTokensFor(value)[0] ?? defaultToken,
-                  }))
-                }
-                options={chains.map((chain) => ({ label: chain, value: chain }))}
-              />
-              <SelectField
-                label="代币"
-                value={sendForm.token}
-                onChange={(value) => onSendFormChange((form) => ({ ...form, token: value }))}
-                options={transferTokensFor(sendForm.chain).map((token) => ({
-                  label: token,
-                  value: token,
-                }))}
-              />
-            </div>
-            <label className="block">
-              <span className="mb-2 block text-body-sm font-semibold text-[#3b2615]">收款地址</span>
-              <Input
-                className="border-[#9b6330]/40 bg-[#fff8df]/75 text-[#3b2615] placeholder:text-[#8c5524]/70"
-                placeholder="输入收款钱包地址"
-                value={sendForm.toAddress}
-                onChange={(event) =>
-                  onSendFormChange((form) => ({ ...form, toAddress: event.target.value }))
-                }
-              />
-            </label>
-            <label className="block">
-              <span className="mb-2 block text-body-sm font-semibold text-[#3b2615]">数量</span>
-              <Input
-                className="border-[#9b6330]/40 bg-[#fff8df]/75 text-[#3b2615] placeholder:text-[#8c5524]/70"
-                inputMode="decimal"
-                placeholder="0.00"
-                value={sendForm.amount}
-                onChange={(event) =>
-                  onSendFormChange((form) => ({ ...form, amount: event.target.value }))
-                }
-              />
-            </label>
-            {signingState.status === 'error' ? (
-              <div className="rounded-2xl border border-destructive/40 bg-error-surface p-3 text-caption font-semibold text-error-text">
-                {signingState.error}
+                <Button
+                  className="w-full"
+                  disabled={draft.status !== 'ready'}
+                  onClick={onConfirmCreate}
+                >
+                  已备份，创建岛屿钱包
+                </Button>
               </div>
             ) : null}
-            {signingState.status === 'signing' ? (
-              <div className="rounded-2xl border border-[#9b6330]/35 bg-[#fff8df]/65 p-3 text-caption text-[#6b4a24]">
-                正在调用 tcx-wasm 生成本地签名...
+
+            {modalKind === 'send' ? (
+              <div className="space-y-4 pb-2">
+                <div className="rounded-xl border border-[#9b6330]/30 bg-[#fff8df]/56 px-3 py-2 text-caption font-black text-[#6b4a24]">
+                  当前余额：
+                  {tokenBalanceLabel(
+                    islands.find((island) => island.id === sendForm.fromIslandId),
+                    sendForm.token,
+                  )}
+                </div>
+                <SelectField
+                  label="付款岛屿"
+                  value={sendForm.fromIslandId}
+                  onChange={(value) =>
+                    onSendFormChange((form) => ({ ...form, fromIslandId: value }))
+                  }
+                  options={islands.map((island) => ({
+                    label: island.name,
+                    value: island.id,
+                  }))}
+                />
+                <div className="grid gap-3">
+                  <SelectField
+                    label="链"
+                    value={sendForm.chain}
+                    onChange={(value) =>
+                      onSendFormChange((form) => ({
+                        ...form,
+                        chain: value,
+                        token: transferTokensFor(value)[0] ?? defaultToken,
+                      }))
+                    }
+                    options={chains.map((chain) => ({ label: chain, value: chain }))}
+                  />
+                  <SelectField
+                    label="代币"
+                    value={sendForm.token}
+                    onChange={(value) => onSendFormChange((form) => ({ ...form, token: value }))}
+                    options={transferTokensFor(sendForm.chain).map((token) => ({
+                      label: token,
+                      value: token,
+                    }))}
+                  />
+                </div>
+                <label className="block">
+                  <span className="mb-2 block text-body-sm font-semibold text-[#3b2615]">
+                    收款地址
+                  </span>
+                  <Input
+                    className="border-[#9b6330]/40 bg-[#fff8df]/75 text-[#3b2615] placeholder:text-[#8c5524]/70"
+                    placeholder="输入收款钱包地址"
+                    value={sendForm.toAddress}
+                    onChange={(event) =>
+                      onSendFormChange((form) => ({ ...form, toAddress: event.target.value }))
+                    }
+                  />
+                </label>
+                <label className="block">
+                  <span className="mb-2 block text-body-sm font-semibold text-[#3b2615]">数量</span>
+                  <Input
+                    className="border-[#9b6330]/40 bg-[#fff8df]/75 text-[#3b2615] placeholder:text-[#8c5524]/70"
+                    inputMode="decimal"
+                    placeholder="0.00"
+                    value={sendForm.amount}
+                    onChange={(event) =>
+                      onSendFormChange((form) => ({ ...form, amount: event.target.value }))
+                    }
+                  />
+                </label>
+                {signingState.status === 'error' ? (
+                  <div className="rounded-2xl border border-destructive/40 bg-error-surface p-3 text-caption font-semibold text-error-text">
+                    {signingState.error}
+                  </div>
+                ) : null}
+                {signingState.status === 'signing' ? (
+                  <div className="rounded-2xl border border-[#9b6330]/35 bg-[#fff8df]/65 p-3 text-caption text-[#6b4a24]">
+                    正在调用 tcx-wasm 生成本地签名...
+                  </div>
+                ) : null}
+                <div className="rounded-xl border border-[#9b6330]/30 bg-[#fff8df]/56 px-3 py-2 text-caption font-black text-[#6b4a24]">
+                  当前使用代币：{sendForm.token}
+                </div>
+                <Button className="w-full" onClick={onSubmitTransfer}>
+                  签名 / 广播并写入航线
+                </Button>
               </div>
             ) : null}
-            <div className="rounded-xl border border-[#9b6330]/30 bg-[#fff8df]/56 px-3 py-2 text-caption font-black text-[#6b4a24]">
-              当前使用代币：{sendForm.token}
-            </div>
-            <Button className="w-full" onClick={onSubmitTransfer}>
-              签名 / 广播并写入航线
-            </Button>
-          </div>
-        ) : null}
 
-        {modalKind === 'receive' && receiveIsland ? (
-          <div className="space-y-4 pb-2">
-            <SelectField
-              label="收款岛屿"
-              value={receiveIsland.id}
-              onChange={onReceiveIslandChange}
-              options={islands.map((island) => ({
-                label: `${island.name} · ${island.address}`,
-                value: island.id,
-              }))}
-            />
-            <SelectField
-              label="收款链"
-              value={receiveChain}
-              onChange={onReceiveChainChange}
-              options={chains.map((chain) => ({ label: chain, value: chain }))}
-            />
-            <SelectField
-              label="收款代币"
-              value={visibleReceiveToken}
-              onChange={onReceiveTokenChange}
-              options={receiveTokenChoices.map((token) => ({ label: token, value: token }))}
-            />
-            <div className="grid gap-4">
-              <ReceiveQrCode value={qrPayload} />
-              {receiveError ? (
-                <p className="text-caption font-semibold leading-5 text-warning">
-                  {receiveError}
-                </p>
-              ) : null}
-            </div>
+            {modalKind === 'receive' && receiveIsland ? (
+              <div className="space-y-4 pb-2">
+                <SelectField
+                  label="收款岛屿"
+                  value={receiveIsland.id}
+                  onChange={onReceiveIslandChange}
+                  options={islands.map((island) => ({
+                    label: `${island.name} · ${island.address}`,
+                    value: island.id,
+                  }))}
+                />
+                <SelectField
+                  label="收款链"
+                  value={receiveChain}
+                  onChange={onReceiveChainChange}
+                  options={chains.map((chain) => ({ label: chain, value: chain }))}
+                />
+                <SelectField
+                  label="收款代币"
+                  value={visibleReceiveToken}
+                  onChange={onReceiveTokenChange}
+                  options={receiveTokenChoices.map((token) => ({ label: token, value: token }))}
+                />
+                <div className="grid gap-4">
+                  <ReceiveQrCode value={qrPayload} />
+                  {receiveError ? (
+                    <p className="text-caption font-semibold leading-5 text-warning">
+                      {receiveError}
+                    </p>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
           </div>
-        ) : null}
-        </div>
         </div>
       </div>
     </div>
@@ -3048,34 +3344,40 @@ function ExploreView({
               const status = isClaimed ? '已领取' : isComplete ? '可领取' : '进行中'
 
               return (
-              <div className="rounded-xl border border-white/45 bg-white/22 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.38)] backdrop-blur-md" key={quest.id}>
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <div className="text-body-md font-bold text-foreground">{quest.title}</div>
-                    <p className="mt-1 text-body-sm text-muted-foreground">{quest.detail}</p>
-                  </div>
-                  <Badge variant={isComplete && !isClaimed ? 'success' : 'neutral'}>
-                    {status}
-                  </Badge>
-                </div>
-                <div className="mt-3 flex items-center justify-between gap-3">
-                  <div>
-                    <div className="text-body-sm font-bold text-primary">+{quest.reward} 岛币</div>
-                    <div className="mt-1 text-caption font-semibold text-muted-foreground">
-                      {quest.difficulty === 'easy' ? '轻松任务' : '困难任务'} · {quest.trigger === 'wallet' ? '钱包操作' : '交易完成'}
+                <div
+                  className="rounded-xl border border-white/45 bg-white/22 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.38)] backdrop-blur-md"
+                  key={quest.id}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="text-body-md font-bold text-foreground">{quest.title}</div>
+                      <p className="mt-1 text-body-sm text-muted-foreground">{quest.detail}</p>
                     </div>
+                    <Badge variant={isComplete && !isClaimed ? 'success' : 'neutral'}>
+                      {status}
+                    </Badge>
                   </div>
-                  <Button
-                    className="h-8 px-3 text-caption"
-                    disabled={!isComplete || isClaimed}
-                    onClick={() => onClaimQuest(quest.id)}
-                    size="sm"
-                    variant={isComplete && !isClaimed ? 'default' : 'secondary'}
-                  >
-                    {isClaimed ? '已领取' : isComplete ? '领取' : '未完成'}
-                  </Button>
+                  <div className="mt-3 flex items-center justify-between gap-3">
+                    <div>
+                      <div className="text-body-sm font-bold text-primary">
+                        +{quest.reward} 岛币
+                      </div>
+                      <div className="mt-1 text-caption font-semibold text-muted-foreground">
+                        {quest.difficulty === 'easy' ? '轻松任务' : '困难任务'} ·{' '}
+                        {quest.trigger === 'wallet' ? '钱包操作' : '交易完成'}
+                      </div>
+                    </div>
+                    <Button
+                      className="h-8 px-3 text-caption"
+                      disabled={!isComplete || isClaimed}
+                      onClick={() => onClaimQuest(quest.id)}
+                      size="sm"
+                      variant={isComplete && !isClaimed ? 'default' : 'secondary'}
+                    >
+                      {isClaimed ? '已领取' : isComplete ? '领取' : '未完成'}
+                    </Button>
+                  </div>
                 </div>
-              </div>
               )
             })}
           </div>
@@ -3110,7 +3412,9 @@ function SkinMarket({
       <div className="flex items-center justify-between gap-3 rounded-xl border border-[#ffc1df]/55 bg-[#111b4c]/52 px-3 py-2 text-[#ffe5f3] shadow-[inset_0_1px_0_rgba(255,255,255,0.12)] backdrop-blur-sm">
         <div>
           <div className="text-body-md font-black">节日岛屿皮肤市场</div>
-          <div className="mt-1 text-caption font-bold opacity-85">同系列三格同排，每个岛屿皮肤独立购买并永久解锁。</div>
+          <div className="mt-1 text-caption font-bold opacity-85">
+            同系列三格同排，每个岛屿皮肤独立购买并永久解锁。
+          </div>
         </div>
         <div className="shrink-0 rounded-md border border-[#ffc1df]/55 bg-[#10133a]/68 px-3 py-2 text-caption font-black text-[#ffd7ec]">
           {coins.toLocaleString('en-US')} 岛币
@@ -3145,9 +3449,18 @@ function SkinMarket({
 
                 return (
                   <div
-                    className="skin-item-card flex min-w-0 flex-col rounded-xl border-2 border-[#ff9fcf]/58 bg-[#f49ac2]/82 p-2 text-[#24102e] shadow-[0_4px_0_rgba(98,31,82,0.36)]"
+                    className={`skin-item-card relative flex min-w-0 flex-col rounded-xl border-2 p-2 text-[#24102e] shadow-[0_4px_0_rgba(98,31,82,0.36)] ${
+                      isEquipped
+                        ? 'border-[#ffe9a8] bg-[#ffd27b] shadow-[0_4px_0_rgba(107,68,17,0.42),0_0_18px_rgba(255,233,168,0.42)]'
+                        : 'border-[#ff9fcf]/58 bg-[#f49ac2]/82'
+                    }`}
                     key={item.id}
                   >
+                    {isEquipped ? (
+                      <div className="absolute right-1 top-1 z-10 rounded-md border border-[#ffe9a8]/80 bg-[#2b1608]/86 px-1.5 py-0.5 text-[10px] font-black text-[#ffe9a8] shadow-[0_2px_0_rgba(55,28,8,0.55)]">
+                        使用中
+                      </div>
+                    ) : null}
                     <div className="skin-preview-ocean grid aspect-square place-items-center overflow-hidden rounded-lg border-2 border-[#ffd4ec]/72 bg-[#133d69]">
                       <img
                         src={item.image}
@@ -3208,8 +3521,7 @@ function ProfileView({ hudStats }: { hudStats: HudStat[] }) {
         <div className="text-body-md font-bold text-foreground">群岛成长规则</div>
         <p className="mt-2 text-body-sm leading-6 text-muted-foreground">
           账户总价值达到 10U 及以下 / 100U 及以下 / 1000U 以上时，岛屿会对应小型、
-          中型和大型三档尺寸进化。交易行为、imKey 确认和风险识别可以额外获得海岛币，
-          用于兑换装饰。
+          中型和大型三档尺寸进化。交易行为、imKey 确认和风险识别可以额外获得海岛币， 用于兑换装饰。
         </p>
       </div>
     </OceanPage>
@@ -3260,7 +3572,9 @@ function TransactionRow({
       </div>
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
-          <span className="text-caption font-semibold text-muted-foreground">{transaction.time}</span>
+          <span className="text-caption font-semibold text-muted-foreground">
+            {transaction.time}
+          </span>
           <Badge variant={transaction.status === 'risk' ? 'neutral' : 'primary'} size="sm">
             {transaction.status === 'pending'
               ? '航行中'
